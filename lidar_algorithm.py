@@ -970,7 +970,7 @@ Créer la ZIV :
             except Exception:
                 pass
             box = QMessageBox(main_win)
-            box.setIcon(QMessageBox.Critical)
+            box.setIcon(QMessageBox.Icon.Critical)
             box.setWindowTitle(f"{PLUGIN_DISPLAY_NAME} - {title}")
             box.setText(title)
             # Show only the short message in the main area, the full
@@ -980,7 +980,7 @@ Créer la ZIV :
             box.setInformativeText(short)
             if "Détail technique" in message:
                 box.setDetailedText(message)
-            box.setStandardButtons(QMessageBox.Ok)
+            box.setStandardButtons(QMessageBox.StandardButton.Ok)
             box.exec()
         except Exception as e:
             # Last resort - never crash the plugin because of error display

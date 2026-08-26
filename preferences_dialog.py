@@ -103,16 +103,17 @@ class PreferencesDialog(QDialog):
 
         # ----- Buttons ----
         btns = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
         )
-        btns.button(QDialogButtonBox.Ok).setText("Enregistrer")
-        btns.button(QDialogButtonBox.Cancel).setText("Annuler")
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText("Enregistrer")
+        btns.button(QDialogButtonBox.StandardButton.Cancel).setText("Annuler")
         btns.accepted.connect(self._on_save)
         btns.rejected.connect(self.reject)
 
         reset_btn = QPushButton("Restaurer les défauts")
         reset_btn.clicked.connect(self._on_reset)
-        btns.addButton(reset_btn, QDialogButtonBox.ResetRole)
+        btns.addButton(reset_btn, QDialogButtonBox.ButtonRole.ResetRole)
 
         root.addWidget(btns)
 
