@@ -1,5 +1,5 @@
 [general]
-name=ZIV_prime
+name=Zones d'influences visuelles (ZIV)
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 supportsQt6=yes
@@ -31,6 +31,7 @@ experimental=False
 deprecated=False
 
 changelog= 1.2.0 - Release prepared for the official QGIS plugin repository.
+    Plugin renamed for display: "Zones d'influences visuelles (ZIV)" (the package folder, the provider ids genziv and pcfr_vis and the QgsSettings namespace are unchanged, so existing Processing models and preferences keep working).
     Description and about text rewritten in English. Author, contact email, repository, tracker and homepage filled in.
     GNU GPL v3 LICENSE and a README added at the root of the package.
     Upstream credits moved out of the internal algorithms/README.txt and into the public plugin description and the headers of the derived modules: "Visibility Analysis" by Zoran Cuckovic (GPL v3) for the visibility engine, "PointCloudFR" by Samy KHELIL (GPL v2 or later) for the IGN LiDAR HD tile download.

@@ -1,4 +1,6 @@
-# ZIV_prime
+# Zones d'influences visuelles (ZIV)
+
+> Package name: `ZIV_prime`
 
 QGIS plugin computing **Visual Influence Zones** (in French *zones d'influence
 visuelle*, ZIV) from the French IGN **LiDAR HD** elevation data.

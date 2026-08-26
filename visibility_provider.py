@@ -29,7 +29,7 @@ class PcfrVisibilityProvider(QgsProcessingProvider):
         return "pcfr_vis"
 
     def name(self):
-        return "ZIV_prime — Visibilité (interne)"
+        return "Zones d'influences visuelles (ZIV) — Visibilité (interne)"
 
     def longName(self):
         return self.name()
