@@ -22,8 +22,7 @@ From an area of interest, the plugin:
 3. merges and resamples them into a single elevation raster;
 4. computes the **viewshed** over that terrain;
 5. masks out woodland (IGN BD Forêt) and buildings (IGN BD TOPO);
-6. exports an A4 print-ready PNG map with a curated legend;
-7. optionally suggests **photo viewpoints** for photomontages, spread across
+6. optionally suggests **photo viewpoints** for photomontages, spread across
    disjoint visible patches and across distance rings, placed on roads or near
    buildings rather than in the middle of a field.
 

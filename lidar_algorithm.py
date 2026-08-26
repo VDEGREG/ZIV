@@ -44,21 +44,10 @@ from qgis.core import (
     QgsFields,
     QgsFillSymbol,
     QgsGeometry,
-    QgsLayoutExporter,
-    QgsLayoutItemLabel,
-    QgsLayoutItemLegend,
-    QgsLayoutItemMap,
-    QgsLayoutItemPolygon,
-    QgsLayoutItemScaleBar,
-    QgsLayoutPoint,
-    QgsLayoutSize,
-    QgsLegendStyle,
-    QgsLayerTree,
     QgsMessageLog,
     QgsPointCloudClassifiedRenderer,
     QgsPointCloudLayer,
     QgsPointXY,
-    QgsPrintLayout,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingModelAlgorithm,
@@ -68,7 +57,6 @@ from qgis.core import (
     QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSource,
-    QgsProcessingParameterFileDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterRasterDestination,
     QgsProject,
@@ -76,13 +64,12 @@ from qgis.core import (
     QgsRasterShader,
     QgsRectangle,
     QgsSingleBandPseudoColorRenderer,
-    QgsUnitTypes,
     QgsVectorFileWriter,
     QgsVectorLayer,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QCoreApplication, QPointF, Qt, QVariant
-from qgis.PyQt.QtGui import QColor, QFont, QPolygonF
+from qgis.PyQt.QtCore import QCoreApplication, QVariant
+from qgis.PyQt.QtGui import QColor, QFont
 from qgis.PyQt.QtWidgets import QMessageBox
 from requests.adapters import HTTPAdapter, Retry
 
@@ -213,7 +200,6 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
     ZIV_RADIUS = "ZIV_RADIUS"
     ZIV_PANEL_HEIGHT = "ZIV_PANEL_HEIGHT"
     ZIV_OUTPUT = "ZIV_OUTPUT"
-    MAP_OUTPUT = "MAP_OUTPUT"
     ZIV_SYMBOLOGY = "ZIV_SYMBOLOGY"
     # v3.11.0/v3.13.0: photo viewpoints - opt-in checkbox + number of
     # camera locations generated on the most visible sectors of the ZIV.
@@ -310,10 +296,6 @@ Créer la ZIV :
   ou sur un bâtiment (BDTOPO) sont forcées à "hors visibilité" — on ne voit
   pas le projet depuis une canopée ou un toit. Les empreintes sont
   téléchargées via le WFS IGN ; si indisponible, la ZIV sort inchangée.
-
-Export cartographique (PNG) :
-- Chemin optionnel. Si défini, le plugin produit une mise en page A4 paysage
-  contenant titre, légende, échelle et flèche du nord, puis exporte en PNG.
 """
         )
 
@@ -463,17 +445,6 @@ Export cartographique (PNG) :
             QgsProcessingParameterRasterDestination(
                 self.ZIV_OUTPUT,
                 self.tr("Sortie ZIV (raster) - laisser vide pour temporaire"),
-                optional=True,
-                createByDefault=False,
-            )
-        )
-
-        # Map export (PNG with legend, north arrow and scale bar)
-        self.addParameter(
-            QgsProcessingParameterFileDestination(
-                self.MAP_OUTPUT,
-                self.tr("Export cartographique automatique (PNG)"),
-                fileFilter="PNG (*.png)",
                 optional=True,
                 createByDefault=False,
             )
@@ -901,487 +872,6 @@ Export cartographique (PNG) :
         layer.triggerRepaint()
         self.logger.info("ZIV symbology: translucent red (uniform)")
 
-    def _add_north_arrow(
-        self,
-        layout,
-        center_x_mm: float = 275.0,
-        top_y_mm: float = 160.0,
-    ) -> None:
-        """Draw a compass-style north arrow:
-          * outer circle (compass body)
-          * 4-branch wind rose (two-tone)
-          * "N" label centered above the top point
-        """
-        try:
-            cx = center_x_mm
-            radius = 9.0  # mm - compass body radius
-            # Place the compass with its top edge at top_y_mm
-            cy = top_y_mm + radius
-
-            # ---- 1) Outer compass circle ----
-            from qgis.core import QgsLayoutItemShape
-
-            compass = QgsLayoutItemShape(layout)
-            compass.setShapeType(QgsLayoutItemShape.Ellipse)
-            compass_size = radius * 2.0
-            compass_symbol = QgsFillSymbol.createSimple(
-                {
-                    "color": "255,255,255,230",
-                    "outline_color": "20,20,20,255",
-                    "outline_width": "0.5",
-                }
-            )
-            compass.setSymbol(compass_symbol)
-            layout.addLayoutItem(compass)
-            compass.attemptMove(
-                QgsLayoutPoint(
-                    cx - radius,
-                    cy - radius,
-                    QgsUnitTypes.LayoutMillimeters,
-                )
-            )
-            compass.attemptResize(
-                QgsLayoutSize(
-                    compass_size, compass_size, QgsUnitTypes.LayoutMillimeters
-                )
-            )
-
-            # ---- 2) North half of the wind rose (dark) ----
-            # Two triangles forming a diamond, the upper one filled dark, the
-            # lower one filled light. Same for left/right with intermediate tone.
-            tip_offset = radius * 0.95
-            wing_offset = radius * 0.18  # how wide the diamond is at the center
-
-            # Top dark triangle (pointing up = NORTH)
-            north_pts = QPolygonF(
-                [
-                    QPointF(cx, cy - tip_offset),
-                    QPointF(cx - wing_offset, cy),
-                    QPointF(cx + wing_offset, cy),
-                ]
-            )
-            north_tri = QgsLayoutItemPolygon(north_pts, layout)
-            north_tri.setSymbol(
-                QgsFillSymbol.createSimple(
-                    {
-                        "color": "20,20,20,255",
-                        "outline_color": "0,0,0,255",
-                        "outline_width": "0.2",
-                    }
-                )
-            )
-            layout.addLayoutItem(north_tri)
-
-            # Bottom light triangle (pointing down = SOUTH)
-            south_pts = QPolygonF(
-                [
-                    QPointF(cx, cy + tip_offset),
-                    QPointF(cx - wing_offset, cy),
-                    QPointF(cx + wing_offset, cy),
-                ]
-            )
-            south_tri = QgsLayoutItemPolygon(south_pts, layout)
-            south_tri.setSymbol(
-                QgsFillSymbol.createSimple(
-                    {
-                        "color": "220,220,220,255",
-                        "outline_color": "0,0,0,255",
-                        "outline_width": "0.2",
-                    }
-                )
-            )
-            layout.addLayoutItem(south_tri)
-
-            # West and East triangles (mid tone) - thinner diamond
-            wing_offset_h = radius * 0.10
-            west_pts = QPolygonF(
-                [
-                    QPointF(cx - tip_offset, cy),
-                    QPointF(cx, cy - wing_offset_h),
-                    QPointF(cx, cy + wing_offset_h),
-                ]
-            )
-            west_tri = QgsLayoutItemPolygon(west_pts, layout)
-            west_tri.setSymbol(
-                QgsFillSymbol.createSimple(
-                    {
-                        "color": "100,100,100,255",
-                        "outline_color": "0,0,0,255",
-                        "outline_width": "0.2",
-                    }
-                )
-            )
-            layout.addLayoutItem(west_tri)
-
-            east_pts = QPolygonF(
-                [
-                    QPointF(cx + tip_offset, cy),
-                    QPointF(cx, cy - wing_offset_h),
-                    QPointF(cx, cy + wing_offset_h),
-                ]
-            )
-            east_tri = QgsLayoutItemPolygon(east_pts, layout)
-            east_tri.setSymbol(
-                QgsFillSymbol.createSimple(
-                    {
-                        "color": "160,160,160,255",
-                        "outline_color": "0,0,0,255",
-                        "outline_width": "0.2",
-                    }
-                )
-            )
-            layout.addLayoutItem(east_tri)
-
-            # ---- 3) "N" label centered above the compass ----
-            n_label = QgsLayoutItemLabel(layout)
-            n_label.setText("N")
-            n_label.setFont(QFont("Arial", 14, QFont.Bold))
-            try:
-                n_label.setHAlign(Qt.AlignCenter)
-            except Exception:
-                pass
-            n_label.adjustSizeToText()
-            layout.addLayoutItem(n_label)
-            label_w = max(n_label.sizeWithUnits().width(), 6.0)
-            label_h = max(n_label.sizeWithUnits().height(), 6.0)
-            n_label.attemptMove(
-                QgsLayoutPoint(
-                    cx - label_w / 2.0,
-                    cy - radius - label_h - 0.5,
-                    QgsUnitTypes.LayoutMillimeters,
-                )
-            )
-        except Exception as e:
-            self.logger.warning(f"Could not draw north arrow: {e}")
-
-    def _export_map(
-        self,
-        output_png: str,
-        layers: list,
-        focus_extent: QgsRectangle,
-        title: str = "Zone d'Influence Visuelle",
-        legend_layers: list = None,
-    ) -> bool:
-        """Export the ZIV result PNG using the cartographic layout
-        template `templates/ziv_a4.qpt`.
-
-        Approach: load the .qpt template, pre-patch the map extent
-        directly in the XML, then resolve layout items
-        by their TYPE (isinstance) and patch them at runtime. Exactly
-        the same robust technique, adapted for the ZIV pipeline.
-
-        Parameters
-        ----------
-        output_png : destination PNG path
-        layers : ordered list of QgsMapLayer drawn on the map
-                 (top of the list = top of the map render stack)
-        focus_extent : bounding box (Lambert-93) the map should cover
-        title : title text for the title label (top right)
-        legend_layers : ordered list to display in the legend
-                        (typically [buffer, ZIV] - excludes basemaps)
-        """
-        import re as _re
-        from pathlib import Path as _Path
-        from datetime import datetime as _dt
-
-        from qgis.PyQt.QtXml import QDomDocument
-
-        try:
-            from qgis.core import (
-                QgsLayoutExporter,
-                QgsLayoutItemLabel,
-                QgsLayoutItemLegend,
-                QgsLayoutItemMap,
-                QgsLayoutItemPicture,
-                QgsLayoutItemScaleBar,
-                QgsLayerTree,
-                QgsPrintLayout,
-                QgsReadWriteContext,
-            )
-        except Exception as imp_err:
-            self.logger.error(f"Cannot import layout classes: {imp_err}")
-            return False
-
-        project = QgsProject.instance()
-
-        # ---- 0. Compute the target extent (Lambert-93) ----
-        # 25 % breathing room around the buffer + aspect ratio of the
-        # template's map frame (215.58 × 193.83 mm).
-        FRAME_W_MM = 215.58
-        FRAME_H_MM = 193.83
-        FRAME_RATIO = FRAME_W_MM / FRAME_H_MM
-        MARGIN = 1.25
-
-        target_extent = QgsRectangle(focus_extent)
-        try:
-            cx = (target_extent.xMinimum() + target_extent.xMaximum()) / 2.0
-            cy = (target_extent.yMinimum() + target_extent.yMaximum()) / 2.0
-            w = target_extent.width() * MARGIN
-            h = target_extent.height() * MARGIN
-            if w <= 0:
-                w = max(h, 1.0)
-            if h <= 0:
-                h = max(w, 1.0)
-            if (w / h) > FRAME_RATIO:
-                h = w / FRAME_RATIO
-            else:
-                w = h * FRAME_RATIO
-            target_extent = QgsRectangle(
-                cx - w / 2.0, cy - h / 2.0,
-                cx + w / 2.0, cy + h / 2.0,
-            )
-        except Exception:
-            pass
-
-        target_extent_src_crs = QgsCoordinateReferenceSystem("EPSG:2154")
-
-        # ---- 1. Load + pre-patch the template ----
-        template_path = (
-            _Path(__file__).resolve().parent
-            / "templates"
-            / "ziv_a4.qpt"
-        )
-        if not template_path.exists():
-            self.logger.error(
-                f"Template cartographique introuvable : {template_path}"
-            )
-            return False
-
-        try:
-            template_xml = template_path.read_text(encoding="utf-8")
-        except Exception:
-            template_xml = template_path.read_text(encoding="utf-8-sig")
-
-        # Pre-patch the map EXTENT in the XML so it sticks even if
-        # itemByUuid fails at runtime.
-        new_extent_xml = (
-            f'<Extent xmin="{target_extent.xMinimum()}" '
-            f'ymin="{target_extent.yMinimum()}" '
-            f'xmax="{target_extent.xMaximum()}" '
-            f'ymax="{target_extent.yMaximum()}"/>'
-        )
-        template_xml = _re.sub(
-            r'<Extent\s+xmax="[^"]*"\s+ymax="[^"]*"\s+ymin="[^"]*"\s+xmin="[^"]*"\s*/>',
-            new_extent_xml,
-            template_xml,
-            count=1,
-        )
-
-        doc = QDomDocument()
-        if not doc.setContent(template_xml):
-            self.logger.error("Template .qpt invalide (XML).")
-            return False
-
-        layout = QgsPrintLayout(project)
-        layout.initializeDefaults()
-        ok, _ = layout.loadFromTemplate(doc, QgsReadWriteContext())
-        if not ok:
-            self.logger.error(
-                "loadFromTemplate() a refusé le template cartographique."
-            )
-            return False
-
-        # ---- 2. Resolve items by TYPE (more robust than UUID) ----
-        map_item = None
-        legend = None
-        north = None
-        scale = None
-        labels: list = []
-        for item in layout.items():
-            if isinstance(item, QgsLayoutItemMap):
-                if map_item is None:
-                    map_item = item
-            elif isinstance(item, QgsLayoutItemLegend):
-                if legend is None:
-                    legend = item
-            elif isinstance(item, QgsLayoutItemPicture):
-                # The north arrow is the only picture item left in the
-                # template: it is the one linked to the map.
-                try:
-                    linked = item.linkedMap()
-                except Exception:
-                    linked = None
-                if linked is not None and north is None:
-                    north = item
-            elif isinstance(item, QgsLayoutItemScaleBar):
-                if scale is None:
-                    scale = item
-            elif isinstance(item, QgsLayoutItemLabel):
-                labels.append(item)
-        try:
-            labels.sort(
-                key=lambda l: (
-                    l.pagePos().y()
-                    if hasattr(l, "pagePos")
-                    else l.positionWithUnits().y()
-                    if hasattr(l, "positionWithUnits")
-                    else 0
-                )
-            )
-        except Exception:
-            pass
-        title_label = labels[0] if len(labels) >= 1 else None
-        info_label = labels[1] if len(labels) >= 2 else None
-
-        # ---- 3. Configure the map ----
-        if isinstance(map_item, QgsLayoutItemMap):
-            try:
-                map_item.setCrs(target_extent_src_crs)
-            except Exception:
-                pass
-            try:
-                map_item.zoomToExtent(target_extent)
-            except Exception:
-                try:
-                    map_item.setExtent(target_extent)
-                except Exception:
-                    pass
-            try:
-                map_item.setLayers(layers)
-            except Exception:
-                pass
-            try:
-                map_item.refresh()
-            except Exception:
-                pass
-
-        # ---- 4. Configure the legend (only `legend_layers`) ----
-        if isinstance(legend, QgsLayoutItemLegend) and isinstance(
-            map_item, QgsLayoutItemMap
-        ):
-            try:
-                legend.setLinkedMap(map_item)
-                # legend_layers is the curated buffer + ZIV list; if the
-                # caller didn't provide one, fall back to all the map
-                # layers minus rasters / basemap-named ones.
-                shown = []
-                if legend_layers:
-                    shown = list(legend_layers)
-                else:
-                    shown = [
-                        lyr
-                        for lyr in layers
-                        if isinstance(lyr, QgsVectorLayer)
-                    ]
-                tree = QgsLayerTree()
-                for lyr in shown:
-                    tree.addLayer(lyr)
-                # Keep a strong reference on the layer tree so Python
-                # does not GC it before the C++ legend renders.
-                self._legend_root_group = tree
-                legend.model().setRootGroup(tree)
-                legend.setAutoUpdateModel(False)
-                legend.setLegendFilterByMapEnabled(False)
-                try:
-                    legend.adjustBoxSize()
-                except Exception:
-                    pass
-                try:
-                    legend.refresh()
-                except Exception:
-                    pass
-            except Exception as leg_err:
-                self.logger.warning(
-                    f"Falling back to default legend tree: {leg_err}"
-                )
-
-        # ---- 5. Title text ----
-        if isinstance(title_label, QgsLayoutItemLabel):
-            try:
-                title_label.setText(title)
-            except Exception:
-                pass
-
-        # ---- 5. Info text (échelle / édition / fond) ----
-        scale_value = "—"
-        if isinstance(map_item, QgsLayoutItemMap):
-            try:
-                scale_value = (
-                    f"1/{int(round(map_item.scale())):,}".replace(",", " ")
-                )
-            except Exception:
-                pass
-        if isinstance(info_label, QgsLayoutItemLabel):
-            try:
-                info_label.setText(
-                    "\n".join(
-                        [
-                            f"échelle : {scale_value}",
-                            f"édition : {_dt.now():%d/%m/%Y}",
-                            "fond : QGIS / IGN",
-                        ]
-                    )
-                )
-            except Exception:
-                pass
-
-        # ---- 6. Scale bar + north arrow (re-link + scale-bar safety) ----
-        if isinstance(scale, QgsLayoutItemScaleBar) and isinstance(
-            map_item, QgsLayoutItemMap
-        ):
-            try:
-                scale.setLinkedMap(map_item)
-            except Exception:
-                pass
-            try:
-                from qgis.core import QgsScaleBarSettings
-
-                scale.setSegmentSizeMode(
-                    QgsScaleBarSettings.SegmentSizeFitWidth
-                )
-            except Exception:
-                pass
-            try:
-                scale.setMinimumBarWidth(20.0)
-                scale.setMaximumBarWidth(45.0)
-                scale.setNumberOfSegments(2)
-                scale.setNumberOfSegmentsLeft(0)
-            except Exception:
-                pass
-            try:
-                scale.update()
-            except Exception:
-                pass
-        if isinstance(north, QgsLayoutItemPicture) and isinstance(
-            map_item, QgsLayoutItemMap
-        ):
-            try:
-                north.setLinkedMap(map_item)
-            except Exception:
-                pass
-
-        # ---- 7. Final refresh + Export ----
-        try:
-            layout.refresh()
-        except Exception:
-            pass
-
-        try:
-            exporter = QgsLayoutExporter(layout)
-            settings = QgsLayoutExporter.ImageExportSettings()
-            settings.dpi = 300
-            result = exporter.exportToImage(output_png, settings)
-            if result == QgsLayoutExporter.Success:
-                self.logger.info(
-                    f"ZIV map exported successfully to: {output_png}"
-                )
-                return True
-            self.logger.error(
-                f"ZIV map export failed (QgsLayoutExporter code: {result})"
-            )
-            return False
-        except Exception as e:
-            self.logger.error(f"Error during ZIV map export: {e}")
-            import traceback as _tb
-
-            self.logger.error(_tb.format_exc())
-            return False
-        finally:
-            try:
-                project.layoutManager().removeLayout(layout)
-            except Exception:
-                pass
-
     def _run_ziv_model(
         self,
         dem_path: str,
@@ -1501,7 +991,7 @@ Export cartographique (PNG) :
 
     def _finalize_result(self, result_dict: dict) -> dict:
         # Persist the tile manifest as the very first thing - even if the
-        # ZIV/PNG steps fail later, the tiles we've downloaded are still
+        # ZIV step fails later, the tiles we've downloaded are still
         # valid and worth remembering for next time (audit V2).
         try:
             self._save_tile_manifest()
@@ -1513,10 +1003,9 @@ Export cartographique (PNG) :
         1. Load merged DEM in QGIS + ask the user to validate the merge
            (catches missing tiles before the long ZIV computation runs)
         2. ZIV computation (if requested and validated)
-        3. Toggle the merged DEM visibility OFF (not removed!) so the final
-           PNG export uses the basemap, not the grey DEM
+        3. Toggle the merged DEM visibility OFF (not removed!) so the
+           basemap shows through instead of the grey DEM
         4. Load the analysis buffer LAST so it sits on top of all layers
-        5. Map PNG export (very last step, after every layer is styled)
         """
         ziv_path = ""
         dem_layer_id = None  # kept for symmetry, never populated since v2.1.6
@@ -1603,173 +1092,10 @@ Export cartographique (PNG) :
         # ---- 3bis) Photo viewpoints on the most visible sectors ----
         # Loaded after the buffer so the red stars sit on top of every
         # other layer. Best-effort: never blocks the pipeline.
-        viewpoints_layer = None
         if ziv_path:
-            viewpoints_layer = self._generate_photo_viewpoints(ziv_path)
-
-        # ---- 4) Map PNG export (very last step) ----
-        # NB: the merged DEM is intentionally NOT drawn on the map - only the
-        # red-dashed buffer and the ZIV raster (over the user's basemap).
-        map_output = getattr(self, "_map_output_path", "")
-        if map_output:
-            try:
-                # `layout_layers`   -> drawn on the map (incl. basemaps)
-                # `thematic_layers` -> shown in the legend (curated
-                #                      whitelist built below; excludes the
-                #                      ZIV raster and the basemaps).
-                layout_layers = []
-                if viewpoints_layer is not None:
-                    layout_layers.append(viewpoints_layer)
-                if buffer_layer is not None:
-                    layout_layers.append(buffer_layer)
-
-                # IMPORTANT: do not create a *new* QgsRasterLayer for the ZIV
-                # here - the ZIV raster has already been auto-loaded in the
-                # project by _run_ziv_model. Re-creating one results in TWO
-                # entries ("two ZIV"). Instead we re-use the project layer
-                # pointing to the same source file. (Drawn on the map, but
-                # NOT put in the legend - see the whitelist below.)
-                if ziv_path:
-                    proj_layers = list(
-                        QgsProject.instance().mapLayers().values()
-                    )
-                    norm_target = str(Path(ziv_path).resolve()).lower()
-                    matched = None
-                    for lyr in proj_layers:
-                        try:
-                            if not lyr.isValid():
-                                continue
-                            src = lyr.source().split("|")[0]  # strip provider
-                            if str(Path(src).resolve()).lower() == norm_target:
-                                matched = lyr
-                                break
-                        except Exception:
-                            continue
-                    if matched is not None:
-                        layout_layers.append(matched)
-                    else:
-                        # Fallback: project layer not found, create one ad-hoc
-                        ziv_layer = QgsRasterLayer(
-                            ziv_path, "Zone d'Influence Visuelle (ZIV)"
-                        )
-                        if ziv_layer.isValid():
-                            self._apply_ziv_color_ramp(ziv_layer)
-                            layout_layers.append(ziv_layer)
-
-                # Append the user's currently-visible project layers BELOW our
-                # buffer + ZIV so the basemap (OSM, IGN, satellite, ...) shows
-                # through. Layers already in `layout_layers` are skipped to
-                # avoid duplicates. Order matters: first = top, last = bottom.
-                try:
-                    project = QgsProject.instance()
-                    root = project.layerTreeRoot()
-                    visible_ids = {
-                        n.layerId()
-                        for n in root.findLayers()
-                        if n.isVisible()
-                    }
-                    already = {l.id() for l in layout_layers}
-                    # mapLayers() returns an unordered dict - sort by the
-                    # layer-tree position to respect what the user sees.
-                    tree_order = [n.layerId() for n in root.findLayers()]
-                    for lid in tree_order:
-                        if lid in visible_ids and lid not in already:
-                            lyr = project.mapLayer(lid)
-                            if lyr is not None and lyr.isValid():
-                                layout_layers.append(lyr)
-                except Exception as bg_err:
-                    self.logger.warning(
-                        f"Could not gather project background layers: {bg_err}"
-                    )
-
-                # Legend = curated whitelist only (rayon, points de vue,
-                # ZIP/ZE, + communal & 10 m contours if present). The ZIV
-                # raster and basemaps are deliberately excluded (user spec).
-                thematic_layers = self._curate_legend_layers(
-                    buffer_layer, viewpoints_layer
-                )
-
-                if not layout_layers:
-                    self.logger.warning(
-                        "Map export requested but no displayable layer "
-                        "available - skipping"
-                    )
-                else:
-                    # Compute extent from the buffer layer if available, else
-                    # union of all layout layers.
-                    if buffer_layer is not None:
-                        focus_extent = buffer_layer.extent()
-                    else:
-                        focus_extent = layout_layers[0].extent()
-                        for lyr in layout_layers[1:]:
-                            focus_extent.combineExtentWith(lyr.extent())
-
-                    title = (
-                        "Zone d'Influence Visuelle"
-                        if ziv_path
-                        else f"{PLUGIN_DISPLAY_NAME} — Téléchargement IGN"
-                    )
-
-                    self._export_map(
-                        map_output,
-                        layout_layers,
-                        focus_extent,
-                        title=title,
-                        legend_layers=thematic_layers,
-                    )
-                    result_dict[self.MAP_OUTPUT] = map_output
-            except Exception as map_err:
-                self.logger.error(f"Map export failed: {map_err}")
+            self._generate_photo_viewpoints(ziv_path)
 
         return result_dict
-
-    def _curate_legend_layers(self, buffer_layer, viewpoints_layer):
-        """Ordered whitelist of layers shown in the ZIV map legend:
-        analysis radius, photo viewpoints, ZIP/ZE (zone d'étude), and -
-        only if present in the project - communal layers (which carry
-        the commune labels) and the 10 m contour lines. The ZIV raster
-        and the basemaps are deliberately excluded (user spec)."""
-        out = []
-        seen = set()
-
-        def _add(lyr):
-            if lyr is None:
-                return
-            try:
-                if not lyr.isValid():
-                    return
-                lid = lyr.id()
-            except Exception:
-                return
-            if lid in seen:
-                return
-            seen.add(lid)
-            out.append(lyr)
-
-        _add(buffer_layer)                              # rayon d'analyse
-        _add(viewpoints_layer)                          # points de vue
-        _add(getattr(self, "_ziv_zip_layer", None))     # ZIP / ZE
-
-        # Optional project layers: communal boundaries + 10 m contours.
-        try:
-            for lyr in QgsProject.instance().mapLayers().values():
-                try:
-                    nm = lyr.name().lower()
-                except Exception:
-                    continue
-                is_commune = ("commune" in nm or "communal" in nm)
-                # e.g. "Courbes de niveau 10m [Grand Est]". Match "10m" /
-                # "10 m" (not a bare "10") to avoid catching "100m" or a
-                # year like "2010" in a layer name.
-                is_contour = (
-                    ("isoligne" in nm or "courbe" in nm or "contour" in nm)
-                    and ("10m" in nm or "10 m" in nm)
-                )
-                if is_commune or is_contour:
-                    _add(lyr)
-        except Exception:
-            pass
-        return out
 
     def _downsample_dem(
         self, input_path: str, downloads_dir: Path
@@ -2949,21 +2275,14 @@ Export cartographique (PNG) :
             ziv_output_param = self.parameterAsOutputLayer(
                 parameters, self.ZIV_OUTPUT, context
             )
-            map_output_param = self.parameterAsFileOutput(
-                parameters, self.MAP_OUTPUT, context
-            )
-            self._map_output_path = map_output_param or ""
 
             # ---- Derive working directory (the old "Output folder") ----
             # Priority order:
             #   1) the directory of the requested ZIV output raster, when set
-            #   2) the directory of the requested PNG map output, when set
-            #   3) a temporary directory unique to this run
+            #   2) a temporary directory unique to this run
             self._is_temporary_output = not bool(ziv_output_param)
             if ziv_output_param:
                 output_folder = Path(ziv_output_param).parent
-            elif map_output_param:
-                output_folder = Path(map_output_param).parent
             else:
                 import tempfile as _tmp
 
@@ -3426,7 +2745,7 @@ Export cartographique (PNG) :
                         # The merged DEM is intentionally NOT auto-loaded:
                         # it is grey, visually noisy and would hide the
                         # basemap. It remains available on disk for the ZIV
-                        # step and the PNG map export. It is already at
+                        # step. It is already at
                         # ZIV_TARGET_RES_M, so no separate downsample.
                         final_dem = merged_output
                         return self._finalize_result({
