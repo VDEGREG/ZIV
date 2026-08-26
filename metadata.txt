@@ -1,5 +1,5 @@
 [general]
-name=Zones d'influences visuelles (ZIV)
+name=Zones d'influence visuelle (ZIV)
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 supportsQt6=yes
@@ -17,9 +17,9 @@ about=ZIV_prime computes Visual Influence Zones - in French "zones d'influence v
     - The discovery and download of the IGN LiDAR HD tiles is derived from "PointCloudFR" by Samy KHELIL, released under the GNU GPL v2 or later - https://github.com/sameeeyy/PointCloudFR
     ZIV_prime as a whole is released under the GNU General Public License v3 or later; see the LICENSE file shipped with the plugin. Elevation and landcover data (c) IGN, Licence Ouverte / Open Licence.
 
-repository=https://github.com/VDEGREG/ZIV_prime
-tracker=https://github.com/VDEGREG/ZIV_prime/issues
-homepage=https://github.com/VDEGREG/ZIV_prime
+repository=https://github.com/VDEGREG/ZIV
+tracker=https://github.com/VDEGREG/ZIV/issues
+homepage=https://github.com/VDEGREG/ZIV
 
 hasProcessingProvider=true
 tags=viewshed,visibility,visual impact,lidar,lidar hd,ign,dem,dtm,dsm,elevation,terrain,france,ziv,zone d'influence visuelle,visibilite
@@ -31,7 +31,7 @@ experimental=False
 deprecated=False
 
 changelog= 1.2.0 - Release prepared for the official QGIS plugin repository.
-    Plugin renamed for display: "Zones d'influences visuelles (ZIV)" (the package folder, the provider ids genziv and pcfr_vis and the QgsSettings namespace are unchanged, so existing Processing models and preferences keep working).
+    Plugin renamed for display: "Zones d'influence visuelle (ZIV)" (the package folder, the provider ids genziv and pcfr_vis and the QgsSettings namespace are unchanged, so existing Processing models and preferences keep working).
     Description and about text rewritten in English. Author, contact email, repository, tracker and homepage filled in.
     GNU GPL v3 LICENSE and a README added at the root of the package.
     Upstream credits moved out of the internal algorithms/README.txt and into the public plugin description and the headers of the derived modules: "Visibility Analysis" by Zoran Cuckovic (GPL v3) for the visibility engine, "PointCloudFR" by Samy KHELIL (GPL v2 or later) for the IGN LiDAR HD tile download.

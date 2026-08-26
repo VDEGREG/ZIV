@@ -1,4 +1,4 @@
-# Zones d'influences visuelles (ZIV)
+# Zones d'influence visuelle (ZIV)
 
 > Package name: `ZIV_prime`
 

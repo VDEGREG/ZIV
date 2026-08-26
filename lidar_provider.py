@@ -43,7 +43,7 @@ class LidarProcessingProvider(QgsProcessingProvider):
 
     def name(self):
         """The provider name"""
-        return self.tr("Zones d'influences visuelles (ZIV)")
+        return self.tr("Zones d'influence visuelle (ZIV)")
 
     def longName(self):
         """The provider full name"""
