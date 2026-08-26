@@ -1,0 +1,43 @@
+[general]
+name=ZIV_prime
+qgisMinimumVersion=3.34
+qgisMaximumVersion=4.99
+supportsQt6=yes
+version=1.2.0
+author=G. DELSIGNE
+email=gregoire.delsigne@outlook.com
+
+description=Visual influence zones (viewsheds) computed from the French IGN LiDAR HD elevation data: downloads the tiles covering an area of interest, merges them, computes visibility and exports a print-ready map.
+
+about=ZIV_prime computes Visual Influence Zones - in French "zones d'influence visuelle", ZIV - for a project site, from the high-resolution LiDAR HD elevation data published by the French National Geographic Institute (IGN). Typical use: assessing how far, and from where, a planned installation (solar farm, wind turbines, buildings) would be visible in the surrounding landscape.
+    Given an area of interest, the plugin lists and downloads the IGN LiDAR HD tiles that intersect it (terrain model, surface model, canopy height model or raw point clouds), merges and resamples them, computes the viewshed over the resulting terrain, automatically masks out woodland (IGN BD Foret) and buildings (IGN BD TOPO), and exports an A4 print-ready PNG map with a curated legend. It can optionally suggest photo viewpoints for photomontages, spread evenly across disjoint visible patches and across distance rings, and placed on roads or close to buildings rather than in the middle of a field.
+    The visibility algorithms ship with the plugin as an internal Processing provider, so no companion plugin has to be installed. The only Python dependencies are requests and numpy, both already bundled with QGIS.
+    CREDITS - this plugin stands on two open-source QGIS plugins and would not exist without them:
+    - The visibility engine (createviewpoints and viewshed) is derived from "Visibility Analysis" by Zoran Cuckovic, released under the GNU GPL v3 - https://github.com/zoran-cuckovic/QGIS-visibility-analysis
+    - The discovery and download of the IGN LiDAR HD tiles is derived from "PointCloudFR" by Samy KHELIL, released under the GNU GPL v2 or later - https://github.com/sameeeyy/PointCloudFR
+    ZIV_prime as a whole is released under the GNU General Public License v3 or later; see the LICENSE file shipped with the plugin. Elevation and landcover data (c) IGN, Licence Ouverte / Open Licence.
+
+repository=https://github.com/VDEGREG/ZIV_prime
+tracker=https://github.com/VDEGREG/ZIV_prime/issues
+homepage=https://github.com/VDEGREG/ZIV_prime
+
+hasProcessingProvider=true
+tags=viewshed,visibility,visual impact,lidar,lidar hd,ign,dem,dtm,dsm,elevation,terrain,france,ziv,zone d'influence visuelle,visibilite
+
+category=Analysis
+icon=icon.png
+
+experimental=False
+deprecated=False
+
+changelog= 1.2.0 - Release prepared for the official QGIS plugin repository.
+    Description and about text rewritten in English. Author, contact email, repository, tracker and homepage filled in.
+    GNU GPL v3 LICENSE and a README added at the root of the package.
+    Upstream credits moved out of the internal algorithms/README.txt and into the public plugin description and the headers of the derived modules: "Visibility Analysis" by Zoran Cuckovic (GPL v3) for the visibility engine, "PointCloudFR" by Samy KHELIL (GPL v2 or later) for the IGN LiDAR HD tile download.
+    Removed install_dependencies.bat: an orphan script inherited from PointCloudFR, never called by the plugin, that hardcoded a third-party user path and a single QGIS version.
+    1.1.0 - Reprise du moteur ZIV depuis la derniere version du plugin d'origine.
+    Points de vue photo (photomontages) repartis equitablement entre ilots disjoints et par anneaux de distance, places strictement sur route ou aux abords des batiments (jamais en plein champ).
+    Legende des cartes PNG curee : rayon + points de vue + zone d'etude, plus les couches COMMUNE et courbes de niveau 10 m si presentes ; raster ZIV et fonds de carte exclus.
+    1.0.0 - Version initiale de ZIV_prime.
+    Plugin autonome dedie a la generation de Zones d'Influence Visuelle (ZIV) a partir du LiDAR HD de l'IGN.
+    Fonctions : telechargement des dalles LiDAR HD (MNT/MNS/MNH/LIDAR) intersectant l'emprise, fusion optionnelle, calcul de visibilite (viewshed) via un modele de traitement embarque, masquage automatique des forets (BD Foret IGN) et des batiments (BDTOPO), export cartographique PNG A4, et suggestion en opt-in de points de vue photo (photomontages) repartis par anneaux de distance sur les secteurs les plus visibles et accessibles.
