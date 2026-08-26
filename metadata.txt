@@ -32,6 +32,8 @@ deprecated=False
 
 changelog= 1.2.0 - Release prepared for the official QGIS plugin repository.
     Plugin renamed for display: "Zones d'influence visuelle (ZIV)" (the package folder, the provider ids genziv and pcfr_vis and the QgsSettings namespace are unchanged, so existing Processing models and preferences keep working).
+    The viewshed height parameter is now labelled "hauteur de l'observateur" (observer height) and defaults to 1.7 m, eye level, instead of a panel height. The internal parameter id is unchanged, so existing Processing models keep working.
+    The map export no longer carries a company logo: the picture item was removed from the A4 layout template, and the bundled logo file and the logo preference are gone. The optional "project name" printed on the map was removed along with it.
     Description and about text rewritten in English. Author, contact email, repository, tracker and homepage filled in.
     GNU GPL v3 LICENSE and a README added at the root of the package.
     Upstream credits moved out of the internal algorithms/README.txt and into the public plugin description and the headers of the derived modules: "Visibility Analysis" by Zoran Cuckovic (GPL v3) for the visibility engine, "PointCloudFR" by Samy KHELIL (GPL v2 or later) for the IGN LiDAR HD tile download.

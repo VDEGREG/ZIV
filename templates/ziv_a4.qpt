@@ -568,22 +568,6 @@
    </style>
   </styles>
  </LayoutItem>
- <LayoutItem mode="1" uuid="{d7f142f6-42b9-4b77-a256-7ce1668fb657}" northMode="0" itemRotation="0" positionLock="false" blendMode="0" svgBorderColor="0,0,0,255" svgFillColor="255,255,255,255" type="65640" referencePoint="0" excludeFromExports="0" frame="false" pictureHeight="15.3517" resizeMode="0" frameJoinStyle="miter" opacity="1" file="logo.png" pictureRotation="0" mapUuid="" groupUuid="" positionOnPage="228.128,14.7584,mm" size="57.9796,17.3939,mm" outlineWidthM="0.3,mm" svgBorderWidth="0.2" anchorPoint="0" templateUuid="{d7f142f6-42b9-4b77-a256-7ce1668fb657}" pictureWidth="57.9796" visibility="1" position="228.128,14.7584,mm" id="" background="false" northOffset="0" zValue="22">
-  <FrameColor red="0" alpha="255" green="0" blue="0"/>
-  <BackgroundColor red="255" alpha="255" green="255" blue="255"/>
-  <LayoutObject>
-   <dataDefinedProperties>
-    <Option type="Map">
-     <Option value="" name="name" type="QString"/>
-     <Option name="properties"/>
-     <Option value="collection" name="type" type="QString"/>
-    </Option>
-   </dataDefinedProperties>
-   <customproperties>
-    <Option/>
-   </customproperties>
-  </LayoutObject>
- </LayoutItem>
  <LayoutItem uuid="{b847619a-d57c-440b-8ace-8de9fce3c858}" itemRotation="0" positionLock="false" blendMode="0" type="65643" referencePoint="0" excludeFromExports="0" frame="false" cornerRadiusMeasure="0,mm" frameJoinStyle="miter" opacity="1" groupUuid="" positionOnPage="226.296,37.6867,mm" size="61.6435,139.546,mm" outlineWidthM="0.3,mm" templateUuid="{b847619a-d57c-440b-8ace-8de9fce3c858}" visibility="1" position="226.296,37.6867,mm" shapeType="1" id="" background="false" zValue="21">
   <FrameColor red="0" alpha="255" green="0" blue="0"/>
   <BackgroundColor red="255" alpha="255" green="255" blue="255"/>

@@ -35,7 +35,12 @@ from qgis.PyQt.QtWidgets import QAction, QMessageBox, QToolButton
 
 # Plugin version
 VERSION = "1.1.0"
-PLUGIN_NAME = "ZIV_prime"
+# Nom affiche a l'utilisateur (fenetres, menu, journal).
+PLUGIN_NAME = "Zones d'influence visuelle (ZIV)"
+# Nom de paquet : dossier installe, espace QgsSettings, dossier temporaire
+# et contexte de traduction Qt. NE JAMAIS renommer : cela orphelinerait les
+# preferences stockees et changerait le chemin d'installation.
+PLUGIN_PACKAGE = "ZIV_prime"
 PLUGIN_DIR = Path(__file__).parent
 
 
@@ -97,7 +102,7 @@ class PluginSettings:
 
     def __init__(self):
         self.settings = QgsSettings()
-        self.settings_prefix = f"plugins/{PLUGIN_NAME}/"
+        self.settings_prefix = f"plugins/{PLUGIN_PACKAGE}/"
 
     def get(self, key: str, default=None):
         """Get a setting value."""
@@ -307,7 +312,7 @@ def show_error_message(message: str, title: str = "Error"):
     msg.setIcon(QMessageBox.Icon.Critical)
     msg.setText(title)
     msg.setInformativeText(message)
-    msg.setWindowTitle("ZIV_prime - Erreur")
+    msg.setWindowTitle(f"{PLUGIN_NAME} - Erreur")
     msg.exec()
 
 
@@ -317,7 +322,7 @@ def show_info_message(message: str, title: str = "Information"):
     msg.setIcon(QMessageBox.Icon.Information)
     msg.setText(title)
     msg.setInformativeText(message)
-    msg.setWindowTitle("ZIV_prime")
+    msg.setWindowTitle(PLUGIN_NAME)
     msg.exec()
 
 
@@ -327,7 +332,7 @@ class LidarPlugin:
     @staticmethod
     def tr(message: str) -> str:
         """Translate a string with Qt's translator."""
-        return QCoreApplication.translate("ZIV_prime", message)
+        return QCoreApplication.translate(PLUGIN_PACKAGE, message)
 
     def __init__(self, iface):
         self.iface = iface
@@ -337,7 +342,7 @@ class LidarPlugin:
         self.action_prefs = None     # plugin preferences
         self.tool_button = None      # toolbar button (ZIV)
         self.tool_button_action = None
-        self.menu_name = self.tr("&ZIV_prime")
+        self.menu_name = self.tr("&Zones d'influence visuelle (ZIV)")
         self.settings = PluginSettings()
 
         # Initialize plugin directory
@@ -349,7 +354,7 @@ class LidarPlugin:
             self.translator = QTranslator()
             # Defensive: QgsSettings may return None on a fresh profile (audit fix C-3)
             locale = (QgsSettings().value("locale/userLocale") or "fr")[0:2]
-            locale_file = f"ZIV_prime_{locale}.qm"
+            locale_file = f"{PLUGIN_PACKAGE}_{locale}.qm"
             if (locale_path / locale_file).exists():
                 self.translator.load(str(locale_path / locale_file))
                 QCoreApplication.installTranslator(self.translator)
@@ -455,7 +460,7 @@ class LidarPlugin:
         provider, toolbar, menu actions) is wrapped in its own try/except
         so a partial failure cannot prevent the plugin from appearing.
         No error popups - everything goes to the QGIS message log under
-        the "ZIV_prime" tag.
+        the plugin name tag.
         """
         QgsMessageLog.logMessage(
             f"Initializing {PLUGIN_NAME} GUI", PLUGIN_NAME, Qgis.Info
@@ -512,8 +517,8 @@ class LidarPlugin:
                 )
                 self.action_ziv.setToolTip(
                     self.tr(
-                        "ZIV_prime : téléchargement LiDAR IGN + "
-                        "Zone d'Influence Visuelle"
+                        "Zones d'influence visuelle (ZIV) : téléchargement des dalles "
+                        "LiDAR HD de l'IGN et calcul de la visibilité"
                     )
                 )
                 self.action_ziv.triggered.connect(self.run_ziv)
@@ -537,8 +542,8 @@ class LidarPlugin:
                 )
                 self.action_prefs.setToolTip(
                     self.tr(
-                        "Configurer les défauts ZIV_prime : symbologie "
-                        "ZIV, logo des cartes, dossier de logs."
+                        "Configurer les défauts du greffon : symbologie "
+                        "ZIV et dossier de logs."
                     )
                 )
                 self.action_prefs.triggered.connect(self.run_preferences)
@@ -665,7 +670,7 @@ class LidarPlugin:
 
         # 4) Cleanup any temporary files
         try:
-            temp_dir = Path(tempfile.gettempdir()) / PLUGIN_NAME
+            temp_dir = Path(tempfile.gettempdir()) / PLUGIN_PACKAGE
             if temp_dir.exists():
                 shutil.rmtree(temp_dir)
         except Exception as e:
@@ -718,7 +723,8 @@ def classFactory(iface):
             show_info_message(
                 f"Bienvenue dans {PLUGIN_NAME} v{VERSION} !\n\n"
                 "Cliquez sur l'icône de la barre d'outils ou retrouvez l'outil "
-                "dans la Boîte à outils de traitement sous 'ZIV_prime'.",
+                "dans la Boîte à outils de traitement sous "
+                "« Zones d'influence visuelle (ZIV) ».",
                 "Bienvenue",
             )
             settings.set("ever_installed", True)

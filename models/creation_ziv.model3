@@ -721,7 +721,7 @@
   </Option>
   <Option type="Map" name="designerParameterValues">
     <Option type="QString" name="couche_topographique_lidar" value="Fusion_ZIP_39d702ea_c1dc_45f4_b591_b5e48e0cedba"/>
-    <Option type="double" name="hauteur_des_panneaux_en_mtres" value="2.7"/>
+    <Option type="double" name="hauteur_des_panneaux_en_mtres" value="1.7"/>
     <Option type="QgsProcessingOutputLayerDefinition" name="rayon_danalyse">
       <Option type="Map">
         <Option type="Map" name="create_options">
@@ -772,7 +772,7 @@
       <Option type="int" name="data_type" value="1"/>
       <Option type="invalid" name="default"/>
       <Option type="invalid" name="defaultGui"/>
-      <Option type="QString" name="description" value="Hauteur des panneaux (en mètres)"/>
+      <Option type="QString" name="description" value="Hauteur de l'observateur (en mètres)"/>
       <Option type="int" name="flags" value="0"/>
       <Option type="QString" name="help" value=""/>
       <Option type="double" name="max" value="1.7976931348623157e+308"/>

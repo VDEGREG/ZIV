@@ -71,7 +71,6 @@ from qgis.core import (
     QgsProcessingParameterFileDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterRasterDestination,
-    QgsProcessingParameterString,
     QgsProject,
     QgsRasterLayer,
     QgsRasterShader,
@@ -86,6 +85,10 @@ from qgis.PyQt.QtCore import QCoreApplication, QPointF, Qt, QVariant
 from qgis.PyQt.QtGui import QColor, QFont, QPolygonF
 from qgis.PyQt.QtWidgets import QMessageBox
 from requests.adapters import HTTPAdapter, Retry
+
+
+# Nom affiche a l'utilisateur (journal, fenetres, titre de carte).
+PLUGIN_DISPLAY_NAME = "Zones d'influence visuelle (ZIV)"
 
 
 class DownloadProgressTracker:
@@ -170,19 +173,19 @@ class LidarLogger:
     def info(self, message: str):
         """Log info message"""
         self.feedback.pushInfo(message)
-        QgsMessageLog.logMessage(message, "ZIV_prime", Qgis.Info)
+        QgsMessageLog.logMessage(message, PLUGIN_DISPLAY_NAME, Qgis.Info)
         self._write_to_file("INFO", message)
 
     def error(self, message: str):
         """Log error message"""
         self.feedback.reportError(message)
-        QgsMessageLog.logMessage(message, "ZIV_prime", Qgis.Critical)
+        QgsMessageLog.logMessage(message, PLUGIN_DISPLAY_NAME, Qgis.Critical)
         self._write_to_file("ERROR", message)
 
     def warning(self, message: str):
         """Log warning message"""
         self.feedback.pushWarning(message)
-        QgsMessageLog.logMessage(message, "ZIV_prime", Qgis.Warning)
+        QgsMessageLog.logMessage(message, PLUGIN_DISPLAY_NAME, Qgis.Warning)
         self._write_to_file("WARNING", message)
 
     def _write_to_file(self, level: str, message: str):
@@ -211,7 +214,6 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
     ZIV_PANEL_HEIGHT = "ZIV_PANEL_HEIGHT"
     ZIV_OUTPUT = "ZIV_OUTPUT"
     MAP_OUTPUT = "MAP_OUTPUT"
-    PROJECT_NAME = "PROJECT_NAME"
     ZIV_SYMBOLOGY = "ZIV_SYMBOLOGY"
     # v3.11.0/v3.13.0: photo viewpoints - opt-in checkbox + number of
     # camera locations generated on the most visible sectors of the ZIV.
@@ -317,16 +319,6 @@ Export cartographique (PNG) :
 
     def initAlgorithm(self, config=None):
         """Initialize the algorithm parameters."""
-        # Project name (printed on the exported map) - kept first for UI clarity
-        self.addParameter(
-            QgsProcessingParameterString(
-                self.PROJECT_NAME,
-                self.tr("Nom du projet (affiché sur la carte PNG)"),
-                defaultValue="",
-                optional=True,
-            )
-        )
-
         # --- 1) Projet & emprise & rayon -----------------------------------
         # ZIP selection (input project polygon)
         self.addParameter(
@@ -407,9 +399,9 @@ Export cartographique (PNG) :
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.ZIV_PANEL_HEIGHT,
-                self.tr("ZIV : hauteur des panneaux (en mètres)"),
+                self.tr("ZIV : hauteur de l'observateur (en mètres)"),
                 type=QgsProcessingParameterNumber.Double,
-                defaultValue=4.3,
+                defaultValue=1.7,
                 minValue=0.1,
                 maxValue=500.0,
                 optional=False,
@@ -1073,8 +1065,8 @@ Export cartographique (PNG) :
         """Export the ZIV result PNG using the cartographic layout
         template `templates/ziv_a4.qpt`.
 
-        Approach: load the .qpt template, pre-patch the logo path and
-        the map extent directly in the XML, then resolve layout items
+        Approach: load the .qpt template, pre-patch the map extent
+        directly in the XML, then resolve layout items
         by their TYPE (isinstance) and patch them at runtime. Exactly
         the same robust technique, adapted for the ZIV pipeline.
 
@@ -1160,35 +1152,6 @@ Export cartographique (PNG) :
         except Exception:
             template_xml = template_path.read_text(encoding="utf-8-sig")
 
-        # Pre-patch the LOGO path (cf. _resolve_logo_path)
-        resolved_logo = self._resolve_logo_path()
-        if resolved_logo:
-            posix_logo = _Path(resolved_logo).as_posix()
-            original_path = "logo.png"
-            if original_path in template_xml:
-                template_xml = template_xml.replace(
-                    f'file="{original_path}"',
-                    f'file="{posix_logo}"',
-                )
-            # Force raster mode on the logo item
-            anchor = 'uuid="{d7f142f6-42b9-4b77-a256-7ce1668fb657}"'
-            anchor_pos = template_xml.find(anchor)
-            if anchor_pos >= 0:
-                start = template_xml.rfind("<LayoutItem", 0, anchor_pos)
-                if start >= 0:
-                    mode_start = template_xml.find('mode="', start, anchor_pos)
-                    if mode_start >= 0:
-                        mode_end = template_xml.find('"', mode_start + 6)
-                        if mode_end > mode_start:
-                            new_mode = (
-                                "2" if posix_logo.lower().endswith(".svg") else "1"
-                            )
-                            template_xml = (
-                                template_xml[: mode_start + 6]
-                                + new_mode
-                                + template_xml[mode_end:]
-                            )
-
         # Pre-patch the map EXTENT in the XML so it sticks even if
         # itemByUuid fails at runtime.
         new_extent_xml = (
@@ -1221,7 +1184,6 @@ Export cartographique (PNG) :
         # ---- 2. Resolve items by TYPE (more robust than UUID) ----
         map_item = None
         legend = None
-        logo = None
         north = None
         scale = None
         labels: list = []
@@ -1233,16 +1195,14 @@ Export cartographique (PNG) :
                 if legend is None:
                     legend = item
             elif isinstance(item, QgsLayoutItemPicture):
+                # The north arrow is the only picture item left in the
+                # template: it is the one linked to the map.
                 try:
                     linked = item.linkedMap()
                 except Exception:
                     linked = None
-                if linked is not None:
-                    if north is None:
-                        north = item
-                else:
-                    if logo is None:
-                        logo = item
+                if linked is not None and north is None:
+                    north = item
             elif isinstance(item, QgsLayoutItemScaleBar):
                 if scale is None:
                     scale = item
@@ -1325,29 +1285,14 @@ Export cartographique (PNG) :
                     f"Falling back to default legend tree: {leg_err}"
                 )
 
-        # ---- 5. Logo ----
-        if isinstance(logo, QgsLayoutItemPicture) and resolved_logo:
-            try:
-                logo.setResizeMode(QgsLayoutItemPicture.Zoom)
-            except Exception:
-                pass
-            try:
-                logo.setPicturePath(resolved_logo)
-            except Exception:
-                pass
-            try:
-                logo.refreshPicture()
-            except Exception:
-                pass
-
-        # ---- 6. Title text ----
+        # ---- 5. Title text ----
         if isinstance(title_label, QgsLayoutItemLabel):
             try:
                 title_label.setText(title)
             except Exception:
                 pass
 
-        # ---- 7. Info text (échelle / édition / fond) ----
+        # ---- 5. Info text (échelle / édition / fond) ----
         scale_value = "—"
         if isinstance(map_item, QgsLayoutItemMap):
             try:
@@ -1370,7 +1315,7 @@ Export cartographique (PNG) :
             except Exception:
                 pass
 
-        # ---- 8. Scale bar + north arrow (re-link + scale-bar safety) ----
+        # ---- 6. Scale bar + north arrow (re-link + scale-bar safety) ----
         if isinstance(scale, QgsLayoutItemScaleBar) and isinstance(
             map_item, QgsLayoutItemMap
         ):
@@ -1405,7 +1350,7 @@ Export cartographique (PNG) :
             except Exception:
                 pass
 
-        # ---- 9. Final refresh + Export ----
+        # ---- 7. Final refresh + Export ----
         try:
             layout.refresh()
         except Exception:
@@ -1436,40 +1381,6 @@ Export cartographique (PNG) :
                 project.layoutManager().removeLayout(layout)
             except Exception:
                 pass
-
-    def _resolve_logo_path(self) -> str:
-        """Find a logo file for the ZIV PNG.
-
-        Returns an empty string if no logo was found (in which case the
-        layout cell stays blank).
-        """
-        # Plugin preference
-        try:
-            from .preferences_dialog import get as _pref_get
-
-            pref = str(_pref_get("logo_path") or "").strip()
-            if pref and Path(pref).exists():
-                return pref
-        except Exception:
-            pass
-        # Bundled logo
-        try:
-            plugin_dir = Path(__file__).resolve().parent
-        except Exception:
-            plugin_dir = Path(".")
-        candidates = [
-            plugin_dir / "templates" / "logo.png",
-            plugin_dir / "templates" / "logo.jpg",
-            plugin_dir / "templates" / "logo.jpeg",
-            plugin_dir / "templates" / "logo.svg",
-            plugin_dir / "logo.png",
-            plugin_dir / "logo.jpg",
-            plugin_dir / "logo.jpeg",
-        ]
-        for p in candidates:
-            if p.exists():
-                return str(p)
-        return ""
 
     def _run_ziv_model(
         self,
@@ -1512,7 +1423,7 @@ Export cartographique (PNG) :
 
             self.logger.info(
                 f"Running ZIV model (radius={ziv_radius} m, "
-                f"panel_height={ziv_panel_height} m)"
+                f"observer_height={ziv_panel_height} m)"
             )
             result = processing.run(model, params, feedback=self.feedback)
 
@@ -1527,15 +1438,10 @@ Export cartographique (PNG) :
                     ziv_result_path, ziv_output_path
                 )
                 # Try to auto-load the produced ZIV raster with custom styling.
-                # Layer name incorporates the project name when given.
                 try:
-                    project = getattr(self, "_project_name", "") or ""
-                    layer_label = (
-                        f"ZIV — {project}"
-                        if project
-                        else "Zone d'Influence Visuelle (ZIV)"
+                    layer = QgsRasterLayer(
+                        ziv_result_path, "Zone d'Influence Visuelle (ZIV)"
                     )
-                    layer = QgsRasterLayer(ziv_result_path, layer_label)
                     if layer.isValid():
                         self._apply_ziv_color_ramp(layer)
                         QgsProject.instance().addMapLayer(layer)
@@ -1575,7 +1481,7 @@ Export cartographique (PNG) :
                 pass
             box = QMessageBox(main_win)
             box.setIcon(QMessageBox.Critical)
-            box.setWindowTitle(f"ZIV_prime - {title}")
+            box.setWindowTitle(f"{PLUGIN_DISPLAY_NAME} - {title}")
             box.setText(title)
             # Show only the short message in the main area, the full
             # traceback goes into the detailed-text section so the dialog
@@ -1798,14 +1704,11 @@ Export cartographique (PNG) :
                         for lyr in layout_layers[1:]:
                             focus_extent.combineExtentWith(lyr.extent())
 
-                    # Title built from the user-provided project name (if any)
-                    project = getattr(self, "_project_name", "") or ""
-                    base = (
+                    title = (
                         "Zone d'Influence Visuelle"
                         if ziv_path
-                        else "ZIV_prime — Téléchargement IGN"
+                        else f"{PLUGIN_DISPLAY_NAME} — Téléchargement IGN"
                     )
-                    title = f"{base} — {project}" if project else base
 
                     self._export_map(
                         map_output,
@@ -3050,10 +2953,6 @@ Export cartographique (PNG) :
                 parameters, self.MAP_OUTPUT, context
             )
             self._map_output_path = map_output_param or ""
-            project_name = self.parameterAsString(
-                parameters, self.PROJECT_NAME, context
-            )
-            self._project_name = (project_name or "").strip()
 
             # ---- Derive working directory (the old "Output folder") ----
             # Priority order:
@@ -3171,7 +3070,7 @@ Export cartographique (PNG) :
             self.logger.info(f"- Create ZIV: {create_ziv}")
             if create_ziv:
                 self.logger.info(f"- ZIV radius: {ziv_radius} m")
-                self.logger.info(f"- ZIV panel height: {ziv_panel_height} m")
+                self.logger.info(f"- ZIV observer height: {ziv_panel_height} m")
 
             # Create directory structure
             downloads_dir = output_folder / "downloads"
@@ -3307,7 +3206,7 @@ Export cartographique (PNG) :
 
                     if _iface is not None:
                         _iface.messageBar().pushMessage(
-                            "ZIV_prime",
+                            PLUGIN_DISPLAY_NAME,
                             "Aucune dalle LiDAR HD ne couvre cette zone - "
                             "impossible de calculer la ZIV ici.",
                             level=Qgis.Warning,

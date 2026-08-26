@@ -32,7 +32,6 @@ SETTINGS_NS = "plugins/ZIV_prime/preferences/"
 _DEFAULTS = {
     "ziv_symbology_default": 0,  # 0=spotlight, 1=warm gradient, 2=red translucent
     "logs_dir_override": "",  # empty = QGIS profile default
-    "logo_path": "",  # chemin du logo inséré sur les exports PNG
 }
 
 _SYMBOLOGY_LABELS = [
@@ -69,7 +68,7 @@ class PreferencesDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("ZIV_prime — Préférences")
+        self.setWindowTitle("Zones d'influence visuelle (ZIV) — Préférences")
         self.setMinimumWidth(520)
 
         root = QVBoxLayout(self)
@@ -102,22 +101,6 @@ class PreferencesDialog(QDialog):
         )
         root.addWidget(logs_grp)
 
-        # ----- Charte graphique ----
-        charte_grp = QGroupBox("Charte graphique des cartes PNG")
-        charte_form = QFormLayout(charte_grp)
-        self._logo_widget = QgsFileWidget()
-        self._logo_widget.setStorageMode(QgsFileWidget.GetFile)
-        self._logo_widget.setFilter("Images (*.png *.jpg *.jpeg *.svg)")
-        self._logo_widget.setFilePath(str(get("logo_path") or ""))
-        charte_form.addRow(
-            QLabel(
-                "Logo (PNG/JPG/SVG) inséré en haut à droite des exports "
-                "PNG. Laisser vide pour aucun logo :"
-            ),
-            self._logo_widget,
-        )
-        root.addWidget(charte_grp)
-
         # ----- Buttons ----
         btns = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
@@ -136,11 +119,9 @@ class PreferencesDialog(QDialog):
     def _on_save(self):
         set_value("ziv_symbology_default", int(self._symb_combo.currentIndex()))
         set_value("logs_dir_override", self._logs_widget.filePath() or "")
-        set_value("logo_path", self._logo_widget.filePath() or "")
         self.accept()
 
     def _on_reset(self):
         d = defaults()
         self._symb_combo.setCurrentIndex(int(d["ziv_symbology_default"]))
         self._logs_widget.setFilePath("")
-        self._logo_widget.setFilePath("")
