@@ -28,7 +28,7 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMessageBox, QToolButton
 
 # Plugin version
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 # Nom affiche a l'utilisateur (fenetres, menu, journal).
 PLUGIN_NAME = "Zones d'influence visuelle (ZIV)"
 # Nom de paquet : dossier installe, espace QgsSettings, dossier temporaire
@@ -142,7 +142,7 @@ class LidarPlugin:
                 QCoreApplication.installTranslator(self.translator)
 
         QgsMessageLog.logMessage(
-            f"{PLUGIN_NAME} plugin initialized", PLUGIN_NAME, Qgis.Info
+            f"{PLUGIN_NAME} plugin initialized", PLUGIN_NAME, Qgis.MessageLevel.Info
         )
 
     def _register_provider_safe(self, attr_name, provider_class, registry):
@@ -167,7 +167,7 @@ class LidarPlugin:
                 QgsMessageLog.logMessage(
                     f"{attr_name} already registered; skipping.",
                     PLUGIN_NAME,
-                    Qgis.Info,
+                    Qgis.MessageLevel.Info,
                 )
                 return existing
             except (RuntimeError, AttributeError) as e:
@@ -175,7 +175,7 @@ class LidarPlugin:
                     f"{attr_name} stale (wrapped C/C++ deleted: {e}) - "
                     "rebuilding.",
                     PLUGIN_NAME,
-                    Qgis.Warning,
+                    Qgis.MessageLevel.Warning,
                 )
                 setattr(self, attr_name, None)
 
@@ -186,7 +186,7 @@ class LidarPlugin:
             QgsMessageLog.logMessage(
                 f"Could not instantiate {provider_class.__name__}: {e}",
                 PLUGIN_NAME,
-                Qgis.Critical,
+                Qgis.MessageLevel.Critical,
             )
             return None
 
@@ -199,7 +199,7 @@ class LidarPlugin:
                 QgsMessageLog.logMessage(
                     f"Removing stale provider '{provider_id}' from registry.",
                     PLUGIN_NAME,
-                    Qgis.Warning,
+                    Qgis.MessageLevel.Warning,
                 )
                 with contextlib.suppress(Exception):
                     registry.removeProvider(stale)
@@ -211,7 +211,7 @@ class LidarPlugin:
             QgsMessageLog.logMessage(
                 f"addProvider({attr_name}) failed: {e}",
                 PLUGIN_NAME,
-                Qgis.Warning,
+                Qgis.MessageLevel.Warning,
             )
             return None
 
@@ -222,12 +222,12 @@ class LidarPlugin:
             QgsMessageLog.logMessage(
                 f"refreshAlgorithms({attr_name}) failed silently: {e}",
                 PLUGIN_NAME,
-                Qgis.Warning,
+                Qgis.MessageLevel.Warning,
             )
 
         setattr(self, attr_name, instance)
         QgsMessageLog.logMessage(
-            f"{attr_name} registered successfully.", PLUGIN_NAME, Qgis.Info
+            f"{attr_name} registered successfully.", PLUGIN_NAME, Qgis.MessageLevel.Info
         )
         return instance
 
@@ -241,7 +241,7 @@ class LidarPlugin:
         the plugin name tag.
         """
         QgsMessageLog.logMessage(
-            f"Initializing {PLUGIN_NAME} GUI", PLUGIN_NAME, Qgis.Info
+            f"Initializing {PLUGIN_NAME} GUI", PLUGIN_NAME, Qgis.MessageLevel.Info
         )
         try:
             registry = QgsApplication.processingRegistry()
@@ -249,7 +249,7 @@ class LidarPlugin:
             QgsMessageLog.logMessage(
                 f"Could not reach Processing registry: {e}",
                 PLUGIN_NAME,
-                Qgis.Critical,
+                Qgis.MessageLevel.Critical,
             )
             registry = None
 
@@ -266,7 +266,7 @@ class LidarPlugin:
                 QgsMessageLog.logMessage(
                     f"Visibility provider init skipped: {e}",
                     PLUGIN_NAME,
-                    Qgis.Warning,
+                    Qgis.MessageLevel.Warning,
                 )
 
         # ---- Main ZIV_prime provider ----
@@ -281,7 +281,7 @@ class LidarPlugin:
                 QgsMessageLog.logMessage(
                     f"Main provider init skipped: {e}",
                     PLUGIN_NAME,
-                    Qgis.Warning,
+                    Qgis.MessageLevel.Warning,
                 )
 
         # ---- Toolbar button (ZIV) ----
@@ -335,7 +335,7 @@ class LidarPlugin:
                 f"Toolbar init failed (algos still available via "
                 f"Processing toolbox): {e}",
                 PLUGIN_NAME,
-                Qgis.Warning,
+                Qgis.MessageLevel.Warning,
             )
 
     def _open_algorithm_dialog(self, algorithm_id: str, label: str):
@@ -348,7 +348,7 @@ class LidarPlugin:
             QgsMessageLog.logMessage(
                 f"Could not open '{label}' dialog: {e}",
                 PLUGIN_NAME,
-                Qgis.Critical,
+                Qgis.MessageLevel.Critical,
             )
             show_error_message(
                 f"Impossible d'ouvrir la boîte de dialogue '{label}' :\n{e}"
@@ -369,7 +369,7 @@ class LidarPlugin:
             QgsMessageLog.logMessage(
                 f"Could not open Preferences dialog: {e}",
                 PLUGIN_NAME,
-                Qgis.Critical,
+                Qgis.MessageLevel.Critical,
             )
             show_error_message(f"Préférences indisponibles : {e}")
 
@@ -382,7 +382,7 @@ class LidarPlugin:
         next install.
         """
         QgsMessageLog.logMessage(
-            f"Unloading {PLUGIN_NAME} plugin", PLUGIN_NAME, Qgis.Info
+            f"Unloading {PLUGIN_NAME} plugin", PLUGIN_NAME, Qgis.MessageLevel.Info
         )
 
         # 1) Remove toolbar / menu entries
@@ -399,7 +399,7 @@ class LidarPlugin:
             QgsMessageLog.logMessage(
                 f"unload(toolbar) failed silently: {e}",
                 PLUGIN_NAME,
-                Qgis.Warning,
+                Qgis.MessageLevel.Warning,
             )
         finally:
             self.action_ziv = None
@@ -425,13 +425,13 @@ class LidarPlugin:
                     QgsMessageLog.logMessage(
                         f"{attr_name} removed from registry.",
                         PLUGIN_NAME,
-                        Qgis.Info,
+                        Qgis.MessageLevel.Info,
                     )
                 except Exception as e:
                     QgsMessageLog.logMessage(
                         f"removeProvider({attr_name}) failed silently: {e}",
                         PLUGIN_NAME,
-                        Qgis.Warning,
+                        Qgis.MessageLevel.Warning,
                     )
                 finally:
                     setattr(self, attr_name, None)
@@ -449,7 +449,7 @@ class LidarPlugin:
             QgsMessageLog.logMessage(
                 f"Error cleaning temporary files: {str(e)}",
                 PLUGIN_NAME,
-                Qgis.Warning,
+                Qgis.MessageLevel.Warning,
             )
 
 
@@ -478,13 +478,13 @@ def classFactory(iface):
                 "ship with QGIS; install them in the QGIS Python environment "
                 "if a feature fails at runtime. The plugin loads anyway.",
                 PLUGIN_NAME,
-                Qgis.Warning,
+                Qgis.MessageLevel.Warning,
             )
     except Exception as e:
         QgsMessageLog.logMessage(
             f"Dependency check failed ({e}); loading plugin anyway.",
             PLUGIN_NAME,
-            Qgis.Warning,
+            Qgis.MessageLevel.Warning,
         )
 
     # Show welcome message only on first ever installation
@@ -505,6 +505,6 @@ def classFactory(iface):
         return LidarPlugin(iface)
     except Exception as e:
         QgsMessageLog.logMessage(
-            f"Error loading plugin: {str(e)}", PLUGIN_NAME, Qgis.Critical
+            f"Error loading plugin: {str(e)}", PLUGIN_NAME, Qgis.MessageLevel.Critical
         )
         return None

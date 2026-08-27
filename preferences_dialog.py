@@ -91,7 +91,7 @@ class PreferencesDialog(QDialog):
         logs_grp = QGroupBox("Logs")
         logs_form = QFormLayout(logs_grp)
         self._logs_widget = QgsFileWidget()
-        self._logs_widget.setStorageMode(QgsFileWidget.GetDirectory)
+        self._logs_widget.setStorageMode(QgsFileWidget.StorageMode.GetDirectory)
         self._logs_widget.setFilePath(str(get("logs_dir_override") or ""))
         logs_form.addRow(
             QLabel(

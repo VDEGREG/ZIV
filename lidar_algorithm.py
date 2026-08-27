@@ -156,19 +156,19 @@ class LidarLogger:
     def info(self, message: str):
         """Log info message"""
         self.feedback.pushInfo(message)
-        QgsMessageLog.logMessage(message, PLUGIN_DISPLAY_NAME, Qgis.Info)
+        QgsMessageLog.logMessage(message, PLUGIN_DISPLAY_NAME, Qgis.MessageLevel.Info)
         self._write_to_file("INFO", message)
 
     def error(self, message: str):
         """Log error message"""
         self.feedback.reportError(message)
-        QgsMessageLog.logMessage(message, PLUGIN_DISPLAY_NAME, Qgis.Critical)
+        QgsMessageLog.logMessage(message, PLUGIN_DISPLAY_NAME, Qgis.MessageLevel.Critical)
         self._write_to_file("ERROR", message)
 
     def warning(self, message: str):
         """Log warning message"""
         self.feedback.pushWarning(message)
-        QgsMessageLog.logMessage(message, PLUGIN_DISPLAY_NAME, Qgis.Warning)
+        QgsMessageLog.logMessage(message, PLUGIN_DISPLAY_NAME, Qgis.MessageLevel.Warning)
         self._write_to_file("WARNING", message)
 
     def _write_to_file(self, level: str, message: str):
@@ -303,7 +303,7 @@ Créer la ZIV :
             QgsProcessingParameterFeatureSource(
                 self.INPUT,
                 self.tr("Sélection de la ZIP"),
-                [QgsProcessing.TypeVectorAnyGeometry],
+                [QgsProcessing.SourceType.TypeVectorAnyGeometry],
             )
         )
 
@@ -316,7 +316,7 @@ Créer la ZIV :
                     "Rayon d'analyse (mètres) - utilisé pour le buffer de "
                     "téléchargement et la ZIV"
                 ),
-                type=QgsProcessingParameterNumber.Double,
+                type=QgsProcessingParameterNumber.Type.Double,
                 defaultValue=300.0,
                 minValue=1.0,
                 maxValue=50000.0,
@@ -378,7 +378,7 @@ Créer la ZIV :
             QgsProcessingParameterNumber(
                 self.ZIV_PANEL_HEIGHT,
                 self.tr("ZIV : hauteur de l'observateur (en mètres)"),
-                type=QgsProcessingParameterNumber.Double,
+                type=QgsProcessingParameterNumber.Type.Double,
                 defaultValue=1.7,
                 minValue=0.1,
                 maxValue=500.0,
@@ -428,7 +428,7 @@ Créer la ZIV :
                     "Points de vue photo : nombre à générer "
                     "(réparti proche / moyen / éloigné)"
                 ),
-                type=QgsProcessingParameterNumber.Integer,
+                type=QgsProcessingParameterNumber.Type.Integer,
                 defaultValue=6,
                 minValue=1,
                 maxValue=30,
@@ -653,7 +653,7 @@ Créer la ZIV :
             writer = QgsVectorFileWriter.create(
                 str(output_path),
                 fields,
-                QgsWkbTypes.Polygon,
+                QgsWkbTypes.Type.Polygon,
                 crs,
                 QgsCoordinateTransformContext(),
                 options,
@@ -663,7 +663,7 @@ Créer la ZIV :
                     f"QgsVectorFileWriter returned None for: {output_path}"
                 )
                 return ""
-            if writer.hasError() != QgsVectorFileWriter.NoError:
+            if writer.hasError() != QgsVectorFileWriter.WriterError.NoError:
                 self.logger.error(
                     f"Could not create buffer SHP at {output_path}: "
                     f"{writer.errorMessage()}"
@@ -767,7 +767,7 @@ Créer la ZIV :
         invisible = QColor(0, 0, 0, 0)
 
         color_ramp = QgsColorRampShader()
-        color_ramp.setColorRampType(QgsColorRampShader.Interpolated)
+        color_ramp.setColorRampType(QgsColorRampShader.Type.Interpolated)
         color_ramp.setColorRampItemList(
             [
                 QgsColorRampShader.ColorRampItem(-1e6, night, "Hors visibilité"),
@@ -801,7 +801,7 @@ Créer la ZIV :
         # orange at 8, red at 16+. The exact thresholds are conservative
         # so the colours read correctly even on dense viewsheds.
         color_ramp = QgsColorRampShader()
-        color_ramp.setColorRampType(QgsColorRampShader.Interpolated)
+        color_ramp.setColorRampType(QgsColorRampShader.Type.Interpolated)
         color_ramp.setColorRampItemList(
             [
                 QgsColorRampShader.ColorRampItem(-1e6, invisible, "Hors visibilité"),
@@ -844,7 +844,7 @@ Créer la ZIV :
         red = QColor(200, 20, 30, 100)  # ~40% red
 
         color_ramp = QgsColorRampShader()
-        color_ramp.setColorRampType(QgsColorRampShader.Discrete)
+        color_ramp.setColorRampType(QgsColorRampShader.Type.Discrete)
         color_ramp.setColorRampItemList(
             [
                 QgsColorRampShader.ColorRampItem(0.0999, invisible, "Hors visibilité"),
@@ -1599,10 +1599,10 @@ Créer la ZIV :
             options.driverName = "ESRI Shapefile"
             options.fileEncoding = "UTF-8"
             writer = QgsVectorFileWriter.create(
-                str(shp), fields, QgsWkbTypes.Point, crs,
+                str(shp), fields, QgsWkbTypes.Type.Point, crs,
                 QgsCoordinateTransformContext(), options,
             )
-            if writer is None or writer.hasError() != QgsVectorFileWriter.NoError:
+            if writer is None or writer.hasError() != QgsVectorFileWriter.WriterError.NoError:
                 self.logger.warning(
                     "Points de vue : création du shapefile impossible."
                 )
@@ -2510,7 +2510,7 @@ Créer la ZIV :
                             PLUGIN_DISPLAY_NAME,
                             "Aucune dalle LiDAR HD ne couvre cette zone - "
                             "impossible de calculer la ZIV ici.",
-                            level=Qgis.Warning,
+                            level=Qgis.MessageLevel.Warning,
                             duration=10,
                         )
                 return {"OUTPUT_DIRECTORY": str(downloads_dir), "OUTPUT_FILES": ""}

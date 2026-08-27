@@ -13,11 +13,11 @@ PLUGIN_DISPLAY_NAME = "Zones d'influence visuelle (ZIV)"
 class LidarProcessingProvider(QgsProcessingProvider):
     def __init__(self):
         QgsProcessingProvider.__init__(self)
-        QgsMessageLog.logMessage("Provider initialized", PLUGIN_DISPLAY_NAME, Qgis.Info)
+        QgsMessageLog.logMessage("Provider initialized", PLUGIN_DISPLAY_NAME, Qgis.MessageLevel.Info)
         self.refreshAlgorithms()
 
     def load(self):
-        QgsMessageLog.logMessage("Provider load called", PLUGIN_DISPLAY_NAME, Qgis.Info)
+        QgsMessageLog.logMessage("Provider load called", PLUGIN_DISPLAY_NAME, Qgis.MessageLevel.Info)
         self.refreshAlgorithms()
         return True
 
@@ -26,18 +26,18 @@ class LidarProcessingProvider(QgsProcessingProvider):
         return QIcon(str(Path(__file__).parent / "icon.png"))
 
     def loadAlgorithms(self):
-        QgsMessageLog.logMessage("Loading algorithms", PLUGIN_DISPLAY_NAME, Qgis.Info)
+        QgsMessageLog.logMessage("Loading algorithms", PLUGIN_DISPLAY_NAME, Qgis.MessageLevel.Info)
         try:
             # Only the ZIV algorithm is exposed via this provider.
             self.addAlgorithm(ZivAlgorithm())
             QgsMessageLog.logMessage(
                 "Algorithm added successfully (ZIV)",
                 PLUGIN_DISPLAY_NAME,
-                Qgis.Info,
+                Qgis.MessageLevel.Info,
             )
         except Exception as e:
             QgsMessageLog.logMessage(
-                f"Error adding algorithm: {str(e)}", PLUGIN_DISPLAY_NAME, Qgis.Critical
+                f"Error adding algorithm: {str(e)}", PLUGIN_DISPLAY_NAME, Qgis.MessageLevel.Critical
             )
 
     def id(self):

@@ -77,7 +77,7 @@ class ViewshedRaster(QgsProcessingAlgorithm):
   
             self.OBSERVER_POINTS,
             self.tr('Observer location(s)'),
-            [QgsProcessing.TypeVectorPoint]))
+            [QgsProcessing.SourceType.TypeVectorPoint]))
 
         self.addParameter(QgsProcessingParameterRasterLayer
                           (self.DEM,
@@ -91,7 +91,7 @@ class ViewshedRaster(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterNumber(
             self.REFRACTION,
             self.tr('Atmospheric refraction'),
-            QgsProcessingParameterNumber.Double,
+            QgsProcessingParameterNumber.Type.Double,
             defaultValue = 0.13, minValue= 0, maxValue= 1))
         
         

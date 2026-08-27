@@ -3,7 +3,7 @@ name=Zones d'influence visuelle (ZIV)
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 supportsQt6=yes
-version=1.2.2
+version=1.2.3
 author=G. DELSIGNE
 email=gregoire.delsigne@outlook.com
 
@@ -30,7 +30,10 @@ icon=icon.png
 experimental=False
 deprecated=False
 
-changelog= 1.2.2 - Cleared the last 27 findings of the repository scan, the try/except/pass and try/except/continue handlers (Bandit B110 and B112). Bandit now reports nothing at all on this package.
+changelog= 1.2.3 - Scoped all 51 unscoped QGIS and Qt enum accesses, the deprecated Qt5-style form.
+    Qgis.Info becomes Qgis.MessageLevel.Info, QgsFileWidget.GetDirectory becomes QgsFileWidget.StorageMode.GetDirectory, and so on across 14 distinct enums in six modules. QGIS 4 still resolves the unscoped form through its compatibility layer, so nothing was broken - but the plugin declares qgisMaximumVersion 4.99, and that layer will not last forever. The same class of problem already caused a real crash in 1.1.0, where QDialogButtonBox.Ok simply does not exist under Qt6.
+    Every scope name was resolved against the installed QGIS rather than guessed, and each rewrite was accepted only after checking that the scoped constant has exactly the same value as the unscoped one. The reference viewshed run still produces byte-identical rasters.
+    1.2.2 - Cleared the last 27 findings of the repository scan, the try/except/pass and try/except/continue handlers (Bandit B110 and B112). Bandit now reports nothing at all on this package.
     25 of them became `with contextlib.suppress(Exception):`, the Python idiom for a deliberately ignored failure. It is exactly equivalent to try/except/pass and is not flagged.
     The two remaining ones used `continue`, which suppress cannot express, so they now report the failure instead of eating it: a failed reprojection in Points.py is appended to the `errors` list the function already logs, and OGR buffer failures in the photo-viewpoint helper are counted and reported once at the end.
     Verified against a reference viewshed run: the output rasters are byte-identical to those of 1.2.1, so no numeric result changed.

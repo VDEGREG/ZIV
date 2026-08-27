@@ -83,7 +83,7 @@ class ViewshedPoints(QgsProcessingAlgorithm):
   
             self.OBSERVER_POINTS,
             self.tr('Observer location(s)'),
-            [QgsProcessing.TypeVectorPoint]))
+            [QgsProcessing.SourceType.TypeVectorPoint]))
         
         self.addParameter(QgsProcessingParameterRasterLayer
                           (self.DEM,
@@ -98,7 +98,7 @@ class ViewshedPoints(QgsProcessingAlgorithm):
         self.addParameter( 	QgsProcessingParameterNumber(
             self.RADIUS,
             self.tr("Radius of analysis, meters"),
-            QgsProcessingParameterNumber.Integer,
+            QgsProcessingParameterNumber.Type.Integer,
             defaultValue= 5000))
   
         self.addParameter(QgsProcessingParameterField(
@@ -111,7 +111,7 @@ class ViewshedPoints(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterNumber(
             self.OBS_HEIGHT,
             self.tr('Observer height, meters'),
-            QgsProcessingParameterNumber.Double,
+            QgsProcessingParameterNumber.Type.Double,
             defaultValue= 1.6))
         
         self.addParameter(QgsProcessingParameterField(
@@ -123,7 +123,7 @@ class ViewshedPoints(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterNumber(
             self.TARGET_HEIGHT,
             self.tr('Target height, meters'),
-            QgsProcessingParameterNumber.Double,
+            QgsProcessingParameterNumber.Type.Double,
             defaultValue= 0.0))
 
         self.addParameter(QgsProcessingParameterField(
@@ -281,7 +281,7 @@ class ViewshedPoints(QgsProcessingAlgorithm):
                             raster.crs()) # attention ! REPROJECTED    
 
         for f in points.return_points():
-            sink.addFeature(f, QgsFeatureSink.FastInsert)
+            sink.addFeature(f, QgsFeatureSink.Flag.FastInsert)
         
         
 
