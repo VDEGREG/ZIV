@@ -16,16 +16,9 @@ Zoran Cuckovic (GNU GPL v3) - see ``algorithms/README.txt``.
 See ``LICENSE`` and ``README.md`` at the root of the plugin for the full terms
 and the complete credits.
 """
-import importlib.metadata
 import importlib.util
-import locale
-import os
-import platform
 import shutil
-import subprocess
-import sys
 import tempfile
-import time
 from pathlib import Path
 
 from qgis.core import Qgis, QgsApplication, QgsMessageLog, QgsSettings
@@ -34,7 +27,7 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMessageBox, QToolButton
 
 # Plugin version
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 # Nom affiche a l'utilisateur (fenetres, menu, journal).
 PLUGIN_NAME = "Zones d'influence visuelle (ZIV)"
 # Nom de paquet : dossier installe, espace QgsSettings, dossier temporaire
@@ -42,59 +35,6 @@ PLUGIN_NAME = "Zones d'influence visuelle (ZIV)"
 # preferences stockees et changerait le chemin d'installation.
 PLUGIN_PACKAGE = "ZIV_prime"
 PLUGIN_DIR = Path(__file__).parent
-
-
-import re
-
-# PEP 440 numeric prefix : extracts major.minor.patch from "1.26.4", "2.0.0rc1",
-# "1.26.4+computecanada", "0.14.1.post1"... and ignores trailing suffixes.
-_VERSION_NUMERIC_RE = re.compile(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?")
-
-
-def _parse_version_tuple(version_str: str):
-    """Tolerant PEP 440 → (major, minor, patch) tuple. Returns (0, 0, 0) on
-    parse failure, never raises."""
-    if not version_str:
-        return (0, 0, 0)
-    m = _VERSION_NUMERIC_RE.match(version_str)
-    if not m:
-        return (0, 0, 0)
-    return tuple(int(g) if g else 0 for g in m.groups())
-
-
-def check_package_version(package_name: str, required_version: str = None) -> bool:
-    """
-    Check if a package is installed and optionally verify its version.
-    Uses modern importlib.metadata instead of deprecated pkg_resources.
-    Tolerant to PEP 440 suffixes (rc, post, local, etc.) - audit fix C-4.
-    """
-    try:
-        # First try to import the module to verify it's actually available
-        spec = importlib.util.find_spec(package_name)
-        if spec is None:
-            return False
-
-        if required_version is None:
-            return True
-
-        # Get installed version
-        try:
-            installed_version = importlib.metadata.version(package_name)
-            if not installed_version:
-                return False
-        except importlib.metadata.PackageNotFoundError:
-            return False
-
-        # Tolerant numeric comparison
-        return _parse_version_tuple(installed_version) >= _parse_version_tuple(
-            required_version
-        )
-
-    except Exception as e:
-        QgsMessageLog.logMessage(
-            f"Error checking {package_name}: {str(e)}", PLUGIN_NAME, Qgis.Warning
-        )
-        return False
 
 
 class PluginSettings:
@@ -117,193 +57,34 @@ class PluginSettings:
         self.settings.remove(f"{self.settings_prefix}{key}")
 
 
-class DependencyInstaller:
-    """Class to manage plugin dependencies using batch files."""
+class DependencyChecker:
+    """Verifie que les deux dependances Python du greffon sont importables.
 
-    def __init__(self):
-        self.plugin_path = PLUGIN_DIR
-        self.requirements_path = self.plugin_path / "requirements.txt"
-        self.py3_env_path = self.plugin_path / "py3-env.bat"
-        self.install_script_path = self.plugin_path / "install_pip_packages.bat"
-        self.settings = PluginSettings()
+    `requests` et `numpy` sont livres avec QGIS : cette verification ne
+    devrait jamais echouer.
 
-    def check_dependencies(self):
-        """Check if required packages are installed with version verification."""
-        try:
-            if not self.requirements_path.exists():
-                QgsMessageLog.logMessage(
-                    "requirements.txt not found", PLUGIN_NAME, Qgis.Critical
-                )
-                return None
+    Historique : jusqu'a la 1.2.0 le greffon installait lui-meme ces paquets,
+    en lancant un script batch livre dans le paquet, qui appelait
+    l'installateur de paquets Python.
+    plugins.qgis.org refuse cela sur deux regles critiques a la fois -
+    FILE_SUSPICIOUS (un greffon ne livre pas de script executable) et B603 /
+    B607 (execution de processus). Installer des paquets dans
+    l'environnement Python de QGIS a la place de l'utilisateur n'etait de
+    toute facon pas acceptable : on se contente desormais de signaler.
+    """
 
-            # Read requirements with proper encoding handling
+    REQUIRED = ("requests", "numpy")
+
+    def missing(self) -> list:
+        """Noms des paquets requis qui ne sont pas importables."""
+        absent = []
+        for name in self.REQUIRED:
             try:
-                with open(self.requirements_path, encoding="utf-8") as f:
-                    requirements = [
-                        line.strip()
-                        for line in f
-                        if line.strip() and not line.startswith("#")
-                    ]
-            except UnicodeDecodeError:
-                with open(
-                    self.requirements_path, encoding=locale.getpreferredencoding()
-                ) as f:
-                    requirements = [
-                        line.strip()
-                        for line in f
-                        if line.strip() and not line.startswith("#")
-                    ]
-
-            missing = []
-            for requirement in requirements:
-                package_name = (
-                    requirement.split(">=")[0] if ">=" in requirement else requirement
-                )
-                required_version = (
-                    requirement.split(">=")[1] if ">=" in requirement else None
-                )
-
-                if not check_package_version(package_name, required_version):
-                    missing.append(requirement)
-                    QgsMessageLog.logMessage(
-                        f"Package {requirement} needs installation",
-                        PLUGIN_NAME,
-                        Qgis.Info,
-                    )
-                else:
-                    QgsMessageLog.logMessage(
-                        f"Package {package_name} is installed", PLUGIN_NAME, Qgis.Info
-                    )
-
-            return missing
-
-        except Exception as e:
-            QgsMessageLog.logMessage(
-                f"Error checking dependencies: {str(e)}", PLUGIN_NAME, Qgis.Critical
-            )
-            return None
-
-    def verify_batch_files(self):
-        """Verify that required batch files exist."""
-        if platform.system() != "Windows":
-            QgsMessageLog.logMessage(
-                "Not on Windows - batch files not needed", PLUGIN_NAME, Qgis.Info
-            )
-            return True
-
-        if not self.py3_env_path.exists():
-            QgsMessageLog.logMessage(
-                "py3-env.bat not found", PLUGIN_NAME, Qgis.Critical
-            )
-            return False
-
-        if not self.install_script_path.exists():
-            QgsMessageLog.logMessage(
-                "install_pip_packages.bat not found", PLUGIN_NAME, Qgis.Critical
-            )
-            return False
-
-        return True
-
-    def install(self):
-        """Execute dependency installation."""
-        try:
-            # Check dependencies first
-            missing = self.check_dependencies()
-            if missing is None:
-                # check_dependencies could not even read requirements.txt -
-                # proceed conservatively with an empty list so we never
-                # crash on `', '.join(None)` later (audit fix C-2).
-                QgsMessageLog.logMessage(
-                    "Proceeding with full installation", PLUGIN_NAME, Qgis.Warning
-                )
-                missing = []
-            elif not missing:
-                QgsMessageLog.logMessage(
-                    "All dependencies installed", PLUGIN_NAME, Qgis.Success
-                )
-                return True
-
-            # Verify batch files exist for Windows
-            if not self.verify_batch_files():
-                return False
-
-            # Show installation prompt - use real newlines, not escaped
-            missing_str = ", ".join(missing) if missing else "(unknown)"
-            message = (
-                f"The following Python packages are required:\n\n{missing_str}\n\n"
-                "Would you like to install them now? "
-                "After installation please restart QGIS."
-            )
-            reply = QMessageBox.question(
-                None,
-                "Missing Dependencies",
-                message,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-
-            if reply == QMessageBox.StandardButton.No:
-                return False
-
-            try:
-                if platform.system() == "Windows":
-                    # Use batch file on Windows. shell=True is NOT required:
-                    # .bat scripts are launched via cmd.exe by the OS as long
-                    # as we point to the absolute path (audit fix sec).
-                    process = subprocess.Popen(
-                        ["cmd.exe", "/c", str(self.install_script_path)],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                    )
-                else:
-                    # Direct pip installation on Unix
-                    pip_command = "pip3" if shutil.which("pip3") else "pip"
-                    process = subprocess.Popen(
-                        [pip_command, "install", "-r", str(self.requirements_path)],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                    )
-
-                stdout, stderr = process.communicate(timeout=300)  # 5 minutes timeout
-
-                if process.returncode != 0:
-                    QgsMessageLog.logMessage(
-                        f"Installation error: {stderr.decode()}",
-                        PLUGIN_NAME,
-                        Qgis.Critical,
-                    )
-                    return False
-
-            except subprocess.TimeoutExpired:
-                process.kill()
-                QgsMessageLog.logMessage(
-                    "Installation timeout", PLUGIN_NAME, Qgis.Critical
-                )
-                return False
-            except Exception as e:
-                QgsMessageLog.logMessage(
-                    f"Installation error: {str(e)}", PLUGIN_NAME, Qgis.Critical
-                )
-                return False
-
-            # Verify installation
-            missing_after = self.check_dependencies()
-            if missing_after:
-                QgsMessageLog.logMessage(
-                    f"Dependencies still missing: {', '.join(missing_after)}",
-                    PLUGIN_NAME,
-                    Qgis.Critical,
-                )
-                return False
-
-            return True
-
-        except Exception as e:
-            QgsMessageLog.logMessage(
-                f"Installation error: {str(e)}", PLUGIN_NAME, Qgis.Critical
-            )
-            return False
+                if importlib.util.find_spec(name) is None:
+                    absent.append(name)
+            except (ImportError, ValueError):
+                absent.append(name)
+        return absent
 
 
 def show_error_message(message: str, title: str = "Error"):
@@ -697,22 +478,20 @@ def classFactory(iface):
         settings = None
         ever_installed = False
 
-    # Try to install required deps - but never block the load on failure.
+    # Report missing dependencies - never install anything, never block the load.
     try:
-        installer = DependencyInstaller()
-        if not installer.install():
+        absent = DependencyChecker().missing()
+        if absent:
             QgsMessageLog.logMessage(
-                "Some optional dependencies could not be installed; the "
-                "plugin will load anyway. If features fail at runtime, "
-                "install 'requests' and 'numpy' manually in the QGIS "
-                "Python environment.",
+                f"Missing Python packages: {', '.join(absent)}. They normally "
+                "ship with QGIS; install them in the QGIS Python environment "
+                "if a feature fails at runtime. The plugin loads anyway.",
                 PLUGIN_NAME,
                 Qgis.Warning,
             )
     except Exception as e:
         QgsMessageLog.logMessage(
-            f"DependencyInstaller crashed silently: {e}; loading plugin "
-            "anyway.",
+            f"Dependency check failed ({e}); loading plugin anyway.",
             PLUGIN_NAME,
             Qgis.Warning,
         )

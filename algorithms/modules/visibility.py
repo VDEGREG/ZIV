@@ -99,6 +99,9 @@ def error_matrix(radius, size_factor=1):
         
     # find minimum errors per pixel
     old_pixel, min_value =mx_index[0,0] , 1 # initalise 
+    # min_index was read below before ever being assigned (Flake8 F821,
+    # a NameError as soon as the first pixel of a run has an error >= 1).
+    min_index = None
     # iterate column-wise !
     for i in range ( radius ): 
         for j in range (radius_large+1): 
@@ -108,8 +111,10 @@ def error_matrix(radius, size_factor=1):
             pixel = mx_index[index]
                 
             if np.any(pixel != old_pixel): 
-                mx_mask[min_index] = True
+                if min_index is not None:
+                    mx_mask[min_index] = True
                 min_value = 1
+                min_index = None
                 
             old_pixel = pixel
             

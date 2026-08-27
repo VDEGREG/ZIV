@@ -19,6 +19,10 @@ Modifications made for the ZIV_prime plugin by G. DELSIGNE:
     in parallel.
   * Stripped unused algorithms not required by the ZIV_prime
     processing model.
+  * modules/visibility.py: initialised `min_index` before the loop that
+    reads it. Upstream reads it before any assignment, which raises
+    NameError as soon as the first pixel of a run carries an error >= 1
+    (Flake8 F821). Behaviour is unchanged on the normal path.
 
 This directory and its contents are distributed under the same GNU GPL v3
 license. See LICENSE for the full terms.

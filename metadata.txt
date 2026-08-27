@@ -3,7 +3,7 @@ name=Zones d'influence visuelle (ZIV)
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 supportsQt6=yes
-version=1.2.0
+version=1.2.1
 author=G. DELSIGNE
 email=gregoire.delsigne@outlook.com
 
@@ -30,7 +30,10 @@ icon=icon.png
 experimental=False
 deprecated=False
 
-changelog= 1.2.0 - Release prepared for the official QGIS plugin repository.
+changelog= 1.2.1 - Cleared the two blocking findings of the plugin repository security scan.
+    Removed the dependency installer, which shelled out to cmd.exe and pip through two .bat scripts: that tripped FILE_SUSPICIOUS (executable files in the package) and Bandit B603 / B607 (process execution). requests and numpy ship with QGIS, so the installer never actually ran; a missing package is now simply reported in the log. install_pip_packages.bat, py3-env.bat and requirements.txt are gone.
+    Fixed Flake8 F821 in algorithms/modules/visibility.py: min_index was read before being assigned, a NameError waiting for the first pixel of a run with an error of 1 or more. Inherited from the upstream Visibility Analysis code.
+    1.2.0 - Release prepared for the official QGIS plugin repository.
     Plugin renamed for display: "Zones d'influence visuelle (ZIV)" (the package folder, the provider ids genziv and pcfr_vis and the QgsSettings namespace are unchanged, so existing Processing models and preferences keep working).
     The viewshed height parameter is now labelled "hauteur de l'observateur" (observer height) and defaults to 1.7 m, eye level, instead of a panel height. The internal parameter id is unchanged, so existing Processing models keep working.
     The built-in cartographic export was removed, to keep the plugin focused on producing the viewshed itself. Gone with it: the optional PNG output parameter, the A4 layout template and its bundled logo, the logo and project name settings, and roughly 25 kB of layout code. The ZIV raster is still loaded and styled in the project, so any map can be composed with the usual QGIS layout tools.
