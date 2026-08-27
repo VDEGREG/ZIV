@@ -8,7 +8,6 @@ by G. DELSIGNE. Modified from upstream sources — see ``LICENSE`` and
 the full GPL v3 license terms.
 """
 
-from os import path
 
 from qgis.PyQt.QtCore import QCoreApplication
 
@@ -114,8 +113,7 @@ class ViewshedRaster(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         
-        curr_dir = path.dirname(path.realpath(__file__))
-        h = (f"""
+        h = ("""
             Produces a visibility map where each observer point on a terrain model. The output can be:
             <ul>
                 <li> Binary viewshed: visible/not visible (1/0).</li>
@@ -137,11 +135,9 @@ class ViewshedRaster(QgsProcessingAlgorithm):
             For more see <a href="http://zoran-cuckovic.github.io/QGIS-visibility-analysis/help_qgis3.html">help online</a>.
             
             If you find this tool useful, consider to :
-                 
-             <a href='https://ko-fi.com/D1D41HYSW' target='_blank'><img height='30' style='border:0px;height:36px;' src='{curr_dir}/kofi2.webp' /></a>
-            
+             <a href='https://ko-fi.com/D1D41HYSW' target='_blank'>support the author on Ko-fi</a>
+
              <b>This GIS tool is intended for peaceful use !</b>
-            <img height='80' style='border:0px;height:36px;' src='{curr_dir}/ukraine.png'/>
 
             """) 
 

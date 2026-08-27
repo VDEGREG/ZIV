@@ -19,6 +19,12 @@ Modifications made for the ZIV_prime plugin by G. DELSIGNE:
     in parallel.
   * Stripped unused algorithms not required by the ZIV_prime
     processing model.
+  * Help text: the two <img> tags pointing at kofi2.webp and ukraine.png were
+    removed. Neither file ships in this package, so both rendered as empty
+    boxes. The Ko-fi image was the sole content of its anchor, so the link
+    itself was invisible; it is now a text link, which makes the upstream
+    author's donation link visible rather than removing it. The peace message
+    text is kept. An unclosed <b> and an invalid </font size> were fixed.
   * Code-quality pass required by the plugin repository scan, verified to
     change no numeric result (the viewshed rasters of a reference run are
     byte-identical before and after):

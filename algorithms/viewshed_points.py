@@ -8,7 +8,6 @@ by G. DELSIGNE. Modified from upstream sources — see ``LICENSE`` and
 the full GPL v3 license terms.
 """
 
-from os import path
 
 
 from qgis.PyQt.QtCore import QCoreApplication
@@ -169,9 +168,7 @@ class ViewshedPoints(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         
-        curr_dir = path.dirname(path.realpath(__file__))
-
-        h = (f"""
+        h = ("""
             This is the first step for the visibility analysis. The result will be written as a geopackage file with standardised field names and reprojected to match the elevation model used (if needed).
 
             <h3>Parameters</h3>
@@ -186,10 +183,9 @@ class ViewshedPoints(QgsProcessingAlgorithm):
             For other parameters, see <a href="http://www.zoran-cuckovic.from.hr/QGIS-visibility-analysis/help_qgis3.html">help online</a>
             
             If you find this tool useful, consider to :
-                 
-             <a href='https://ko-fi.com/D1D41HYSW' target='_blank'><img height='30' style='border:0px;height:36px;' src='{curr_dir}/kofi2.webp' /></a>
-            
-            <font size = "+3"> <b>&#9774;</b></font size>This GIS tool is intended for <b>peaceful use !
+             <a href='https://ko-fi.com/D1D41HYSW' target='_blank'>support the author on Ko-fi</a>
+
+            <font size="+3"><b>&#9774;</b></font> This GIS tool is intended for <b>peaceful use !</b>
             """) 
 
         return h

@@ -5,7 +5,7 @@ qgisMaximumVersion=4.99
 supportsQt6=yes
 version=1.2.3
 author=G. DELSIGNE
-email=gregoire.delsigne@outlook.com
+email=gregoire.delsigne@outlook.fr
 
 description=Visual influence zones (viewsheds) computed from the French IGN LiDAR HD elevation data: downloads the tiles covering an area of interest, merges them, computes the viewshed and loads the result styled in the project.
 
@@ -30,7 +30,9 @@ icon=icon.png
 experimental=False
 deprecated=False
 
-changelog= 1.2.3 - Scoped all 51 unscoped QGIS and Qt enum accesses, the deprecated Qt5-style form.
+changelog= 1.2.3 - Corrected the contact email: it was outlook.com instead of outlook.fr, so the plugin repository's confirmation email never arrived and the plugin could not be approved.
+    Cleaned the vendored help text of the two visibility algorithms. It carried two <img> tags pointing at kofi2.webp and ukraine.png, neither of which ships in the package, so both rendered as empty boxes. The Ko-fi image was the only content of its link, which therefore did not show at all; it is now a plain text link, so the upstream author's donation link is visible for the first time. Also closed a <b> tag that was left open and fixed an invalid </font size>.
+    Scoped all 51 unscoped QGIS and Qt enum accesses, the deprecated Qt5-style form.
     Qgis.Info becomes Qgis.MessageLevel.Info, QgsFileWidget.GetDirectory becomes QgsFileWidget.StorageMode.GetDirectory, and so on across 14 distinct enums in six modules. QGIS 4 still resolves the unscoped form through its compatibility layer, so nothing was broken - but the plugin declares qgisMaximumVersion 4.99, and that layer will not last forever. The same class of problem already caused a real crash in 1.1.0, where QDialogButtonBox.Ok simply does not exist under Qt6.
     Every scope name was resolved against the installed QGIS rather than guessed, and each rewrite was accepted only after checking that the scoped constant has exactly the same value as the unscoped one. The reference viewshed run still produces byte-identical rasters.
     1.2.2 - Cleared the last 27 findings of the repository scan, the try/except/pass and try/except/continue handlers (Bandit B110 and B112). Bandit now reports nothing at all on this package.
