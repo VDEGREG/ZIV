@@ -11,6 +11,7 @@ license terms.
 from __future__ import division
 
 
+import contextlib
 import os
 #from osgeo import osr, gdal, ogr
 
@@ -167,10 +168,9 @@ def viewshed_raster (option, point, dem, interpolate = True):
     data -= z_abs
 
     target_matrix= None   
-    try :
+    with contextlib.suppress(Exception):
         if point["z_targ"] >0:
             target_matrix = (data + point["z_targ"]) / distance_matrix
-    except Exception: pass
                             
 
     data /= distance_matrix #all one line = (data -z - mxcurv) /mx_dist
@@ -274,11 +274,10 @@ def viewshed_raster (option, point, dem, interpolate = True):
     # we need to adjust for pixel based values
     # (This is not the most efficient approach, 
     #  np.maximum.accumulate has already sorted angles, but these values are not conserved...)
-    try: 
+    with contextlib.suppress(Exception):
         a1 = np.tan(np.radians(point["angle_up"])) * dem.pix   
         a2 = np.tan(np.radians(point["angle_down"])) * dem.pix
         mx_vis[np.logical_or(data > a1, data < a2)] = 0 
-    except Exception: pass
     
 
     if option == DEPTH:
@@ -685,15 +684,13 @@ def visibility_index (raster, obs_height,
         t = time.process_time()
         end = start + ( t - start) * (sample/cnt)
         info = '  \r{0} minutes left'.format(round((end-t)/60, 1)) 
-        try:
+        with contextlib.suppress(Exception):
             feedback.setProgressText(info)
             feedback.setProgress(cnt/sample * 100)
-        except Exception: pass    
 
-    try: 
+    with contextlib.suppress(Exception):
         QgsMessageLog.logMessage(" Finished: " + str( round( (time.clock() - start) / 60, 2)) +
                                  " minutes."  ,   "Viewshed info 2")
-    except Exception: pass
 
     out /= mx_norm
 

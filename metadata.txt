@@ -3,7 +3,7 @@ name=Zones d'influence visuelle (ZIV)
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 supportsQt6=yes
-version=1.2.1
+version=1.2.2
 author=G. DELSIGNE
 email=gregoire.delsigne@outlook.com
 
@@ -30,7 +30,11 @@ icon=icon.png
 experimental=False
 deprecated=False
 
-changelog= 1.2.1 - Cleared the two blocking findings of the plugin repository security scan.
+changelog= 1.2.2 - Cleared the last 27 findings of the repository scan, the try/except/pass and try/except/continue handlers (Bandit B110 and B112). Bandit now reports nothing at all on this package.
+    25 of them became `with contextlib.suppress(Exception):`, the Python idiom for a deliberately ignored failure. It is exactly equivalent to try/except/pass and is not flagged.
+    The two remaining ones used `continue`, which suppress cannot express, so they now report the failure instead of eating it: a failed reprojection in Points.py is appended to the `errors` list the function already logs, and OGR buffer failures in the photo-viewpoint helper are counted and reported once at the end.
+    Verified against a reference viewshed run: the output rasters are byte-identical to those of 1.2.1, so no numeric result changed.
+    1.2.1 - Cleared the two blocking findings of the plugin repository security scan.
     Removed the dependency installer, which shelled out to cmd.exe and pip through two .bat scripts: that tripped FILE_SUSPICIOUS (executable files in the package) and Bandit B603 / B607 (process execution). requests and numpy ship with QGIS, so the installer never actually ran; a missing package is now simply reported in the log. install_pip_packages.bat, py3-env.bat and requirements.txt are gone.
     Cleared the 54 code-quality findings of the repository scan, all of them in the vendored Visibility Analysis code: 21 bare except handlers now name Exception (E722), a comparison to None uses `is not None` (E711), three variables named `l` were renamed (E741), and tab indentation was converted to spaces (E101, W191). Verified against a reference viewshed run: the output rasters are byte-identical before and after, so no numeric result changed.
     Fixed Flake8 F821 in algorithms/modules/visibility.py: min_index was read before being assigned, a NameError waiting for the first pixel of a run with an error of 1 or more. Inherited from the upstream Visibility Analysis code.

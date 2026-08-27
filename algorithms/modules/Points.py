@@ -164,8 +164,13 @@ class Points:
             t = geom.asPoint()
 
             if self.project_crs:
-                try: t = transf.transform(t)
-                except Exception: continue #in case of wrong coords etc.. 
+                try:
+                    t = transf.transform(t)
+                except Exception as e:
+                    # was silently dropped; report through the existing
+                    # `errors` list, which is logged further down.
+                    errors.append("point %s : reprojection failed (%s)" % (feat.id(), e))
+                    continue
                 
             x_geog, y_geog= t
 

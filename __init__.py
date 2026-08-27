@@ -16,6 +16,7 @@ Zoran Cuckovic (GNU GPL v3) - see ``algorithms/README.txt``.
 See ``LICENSE`` and ``README.md`` at the root of the plugin for the full terms
 and the complete credits.
 """
+import contextlib
 import importlib.util
 import shutil
 import tempfile
@@ -27,7 +28,7 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMessageBox, QToolButton
 
 # Plugin version
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 # Nom affiche a l'utilisateur (fenetres, menu, journal).
 PLUGIN_NAME = "Zones d'influence visuelle (ZIV)"
 # Nom de paquet : dossier installe, espace QgsSettings, dossier temporaire
@@ -191,7 +192,7 @@ class LidarPlugin:
 
         # 3) Remove any stale provider with the same id (left over from
         # a broken unload of an older install)
-        try:
+        with contextlib.suppress(Exception):
             provider_id = instance.id()
             stale = registry.providerById(provider_id)
             if stale is not None and stale is not instance:
@@ -200,12 +201,8 @@ class LidarPlugin:
                     PLUGIN_NAME,
                     Qgis.Warning,
                 )
-                try:
+                with contextlib.suppress(Exception):
                     registry.removeProvider(stale)
-                except Exception:
-                    pass
-        except Exception:
-            pass
 
         # 4) Register the fresh instance
         try:
@@ -393,15 +390,11 @@ class LidarPlugin:
             for act in (self.action_ziv, self.action_prefs):
                 if act is None:
                     continue
-                try:
+                with contextlib.suppress(Exception):
                     self.iface.removePluginMenu(self.menu_name, act)
-                except Exception:
-                    pass
             if self.tool_button_action is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self.iface.removeToolBarIcon(self.tool_button_action)
-                except Exception:
-                    pass
         except Exception as e:
             QgsMessageLog.logMessage(
                 f"unload(toolbar) failed silently: {e}",
@@ -444,10 +437,8 @@ class LidarPlugin:
                     setattr(self, attr_name, None)
 
         # 3) Clear version setting (but keep ever_installed flag)
-        try:
+        with contextlib.suppress(Exception):
             self.settings.remove("version")
-        except Exception:
-            pass
 
         # 4) Cleanup any temporary files
         try:
@@ -497,7 +488,7 @@ def classFactory(iface):
         )
 
     # Show welcome message only on first ever installation
-    try:
+    with contextlib.suppress(Exception):
         if settings is not None and not ever_installed:
             show_info_message(
                 f"Bienvenue dans {PLUGIN_NAME} v{VERSION} !\n\n"
@@ -508,8 +499,6 @@ def classFactory(iface):
             )
             settings.set("ever_installed", True)
             settings.set("version", VERSION)
-    except Exception:
-        pass
 
     # Initialize plugin - if THIS step crashes there is nothing we can do
     try:

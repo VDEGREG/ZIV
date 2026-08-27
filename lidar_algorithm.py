@@ -143,19 +143,15 @@ class LidarLogger:
                     / f'genziv_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
                 )
                 # Rotate: keep only the 30 most recent .log files (audit fix M-1)
-                try:
+                with contextlib.suppress(Exception):
                     olds = sorted(
                         log_dir.glob("genziv_*.log"),
                         key=lambda p: p.stat().st_mtime,
                         reverse=True,
                     )
                     for old in olds[30:]:
-                        try:
+                        with contextlib.suppress(Exception):
                             old.unlink()
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
 
     def info(self, message: str):
         """Log info message"""
@@ -703,10 +699,8 @@ Créer la ZIV :
         finally:
             # Ensure the writer is always flushed/destroyed, even on exception
             # (audit fix M-7).
-            try:
+            with contextlib.suppress(Exception):
                 del writer
-            except Exception:
-                pass
 
     def _apply_red_dashed_style(self, layer: QgsVectorLayer) -> None:
         """Apply a red-dashed outline / transparent fill style to a polygon layer."""
@@ -962,13 +956,11 @@ Créer la ZIV :
         when the Processing dialog auto-closes."""
         try:
             main_win = None
-            try:
+            with contextlib.suppress(Exception):
                 from qgis.utils import iface as _iface
 
                 if _iface is not None:
                     main_win = _iface.mainWindow()
-            except Exception:
-                pass
             box = QMessageBox(main_win)
             box.setIcon(QMessageBox.Icon.Critical)
             box.setWindowTitle(f"{PLUGIN_DISPLAY_NAME} - {title}")
@@ -984,19 +976,15 @@ Créer la ZIV :
             box.exec()
         except Exception as e:
             # Last resort - never crash the plugin because of error display
-            try:
+            with contextlib.suppress(Exception):
                 self.logger.error(f"Could not show error popup: {e}")
-            except Exception:
-                pass
 
     def _finalize_result(self, result_dict: dict) -> dict:
         # Persist the tile manifest as the very first thing - even if the
         # ZIV step fails later, the tiles we've downloaded are still
         # valid and worth remembering for next time (audit V2).
-        try:
+        with contextlib.suppress(Exception):
             self._save_tile_manifest()
-        except Exception:
-            pass
 
         """Post-download orchestration, executed in this strict order:
 
@@ -1644,7 +1632,7 @@ Créer la ZIV :
                     "Points de vue : shapefile écrit mais couche invalide."
                 )
                 return None
-            try:
+            with contextlib.suppress(Exception):
                 from qgis.core import QgsMarkerSymbol
 
                 symbol = QgsMarkerSymbol.createSimple(
@@ -1657,9 +1645,7 @@ Créer la ZIV :
                     }
                 )
                 layer.renderer().setSymbol(symbol)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 from qgis.core import (
                     QgsPalLayerSettings,
                     QgsTextBufferSettings,
@@ -1681,8 +1667,6 @@ Créer la ZIV :
                 pal.setFormat(fmt)
                 layer.setLabelsEnabled(True)
                 layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
-            except Exception:
-                pass
             QgsProject.instance().addMapLayer(layer)
             self.logger.info(
                 f"Points de vue photo : {len(feats)} point(s) généré(s) "
@@ -1719,6 +1703,7 @@ Créer la ZIV :
                 "buffered", lyr.GetSpatialRef(), ogr.wkbPolygon
             )
             n = 0
+            skipped = 0
             for f in lyr:
                 g = f.GetGeometryRef()
                 if g is None:
@@ -1726,6 +1711,7 @@ Créer la ZIV :
                 try:
                     b = g.Buffer(float(dist_m))
                 except Exception:
+                    skipped += 1
                     continue
                 nf = ogr.Feature(out.GetLayerDefn())
                 nf.SetGeometry(b)
@@ -1734,6 +1720,10 @@ Créer la ZIV :
                 n += 1
             dst = None
             src = None
+            if skipped:
+                self.logger.warning(
+                    f"Points de vue : {skipped} entite(s) non tamponnee(s) par OGR."
+                )
             return n > 0 and dst_geojson.exists()
         except Exception as e:
             self.logger.warning(f"Points de vue : buffer OGR échoué ({e}).")
@@ -1837,11 +1827,9 @@ Créer la ZIV :
 
             # 2. Fallback: Extract from URL if name is missing
             if not filename:
-                try:
+                with contextlib.suppress(Exception):
                     url_path = url.split("?")[0]
                     filename = url_path.split("/")[-1]
-                except Exception:
-                    pass
 
             # 3. Last resort: Generate UUID
             if not filename or filename == "wfs" or filename == "ows":
@@ -2039,15 +2027,13 @@ Créer la ZIV :
 
     def _forget_tile_in_manifest(self, file_path: Path) -> None:
         """Drop an entry (e.g. when force-redownload nukes the file)."""
-        try:
+        with contextlib.suppress(Exception):
             lock = getattr(self, "_tile_manifest_lock", None)
             if lock is not None:
                 with lock:
                     self._tile_manifest.pop(file_path.name, None)
             else:
                 self._tile_manifest.pop(file_path.name, None)
-        except Exception:
-            pass
 
     def _save_tile_manifest(self) -> None:
         """Persist the manifest to disk. Called once at the end of the run."""
@@ -2312,15 +2298,13 @@ Créer la ZIV :
             # Sanity check: the embedded visibility provider should be loaded
             # at this point (it is registered alongside the main provider).
             if create_ziv:
-                try:
+                with contextlib.suppress(Exception):
                     reg = QgsApplication.processingRegistry()
                     if reg.algorithmById("pcfr_vis:viewshed") is None:
                         self.logger.warning(
                             "Embedded visibility provider not found - "
                             "ZIV computation may fail."
                         )
-                except Exception:
-                    pass
 
             # Store ZIV-related state for the finalize step
             self._ziv_requested = create_ziv
@@ -2443,7 +2427,7 @@ Créer la ZIV :
             # bbox is enough to surface the most common mistake: AOI in
             # WGS84 longitude/latitude or in another country (audit fix M-15).
             METRO_BBOX = QgsRectangle(0.0, 6.0e6, 1.3e6, 7.2e6)
-            try:
+            with contextlib.suppress(Exception):
                 if not aoi_geometry.boundingBox().intersects(METRO_BBOX):
                     self.logger.warning(
                         "L'emprise ne semble PAS recouvrir la France "
@@ -2451,8 +2435,6 @@ Créer la ZIV :
                         "source de votre ZIP. La requête WFS pourrait "
                         "ne renvoyer aucune dalle."
                     )
-            except Exception:
-                pass
 
             # Keep the project centroid AND geometry (pre-buffer,
             # EPSG:2154) - used by the photo-viewpoints generator for
@@ -2520,7 +2502,7 @@ Créer la ZIV :
                     "Aucune dalle LiDAR HD sur l'AOI - zone non couverte "
                     "par le LiDAR HD IGN (couverture ~80 % de la métropole)."
                 )
-                try:
+                with contextlib.suppress(Exception):
                     from qgis.utils import iface as _iface
 
                     if _iface is not None:
@@ -2531,8 +2513,6 @@ Créer la ZIV :
                             level=Qgis.Warning,
                             duration=10,
                         )
-                except Exception:
-                    pass
                 return {"OUTPUT_DIRECTORY": str(downloads_dir), "OUTPUT_FILES": ""}
 
             # Warn (don't block) when the user is about to download a lot of tiles

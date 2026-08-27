@@ -13,6 +13,7 @@ try:
 except ImportError:
     import gdal
 
+import contextlib
 import numpy as np
 
 from os import path
@@ -378,8 +379,7 @@ class Raster:
     """
     def add_to_buffer(self, in_array, report = False):
 
-        try: in_array[self.mask] = self.fill
-        except Exception: pass #an array may be unmasked 
+        with contextlib.suppress(Exception): in_array[self.mask] = self.fill  #an array may be unmasked
 
         y_in = slice(*self.inside_window_slice[0])
         x_in = slice(*self.inside_window_slice[1])
@@ -462,10 +462,9 @@ class Raster:
         else:
             ds = self.gdal_output
 
-        try:
+        with contextlib.suppress(Exception):
             ds.GetRasterBand(1).WriteArray(self.result )
             ds = None
-        except Exception: pass
     
 
        
