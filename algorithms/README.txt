@@ -19,6 +19,18 @@ Modifications made for the ZIV_prime plugin by G. DELSIGNE:
     in parallel.
   * Stripped unused algorithms not required by the ZIV_prime
     processing model.
+  * Code-quality pass required by the plugin repository scan, verified to
+    change no numeric result (the viewshed rasters of a reference run are
+    byte-identical before and after):
+      - 21 bare `except:` handlers became `except Exception:` (Flake8 E722).
+        This is the one behavioural difference: KeyboardInterrupt and
+        SystemExit are no longer swallowed, so a running analysis can be
+        cancelled instead of the cancellation being ignored.
+      - `azimuth_1 != None` became `is not None` in modules/Raster.py (E711).
+      - three variables named `l` were renamed to `missing`, `line` and
+        `row` (E741).
+      - tab indentation on 19 whitespace-only or help-string lines was
+        converted to spaces (E101 / W191).
   * modules/visibility.py: initialised `min_index` before the loop that
     reads it. Upstream reads it before any assignment, which raises
     NameError as soon as the first pixel of a run carries an error >= 1

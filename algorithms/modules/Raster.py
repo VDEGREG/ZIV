@@ -34,8 +34,8 @@ class Raster:
 
     
     def __init__(self, raster, output=None, crs=None):
-	
-		
+
+
         gdal_raster=gdal.Open(raster)
 
        
@@ -197,14 +197,14 @@ class Raster:
                 semiMajor = float(tmp[1])
                 if not 6000000 < semiMajor < 7000000:
                         semiMajor = 6378137
-        except:
+        except Exception:
                 semiMajor = 6378137
 
         try:
                 flattening = float(tmp[2])
                 if not 296 < flattening < 301:
                         flattening = 298.257223563
-        except:
+        except Exception:
                 flattening = 298.257223563
 
         semiMinor = semiMajor - semiMajor / flattening
@@ -240,7 +240,7 @@ class Raster:
 
         if radius_in : mask *= self.mx_dist > radius_in 
 
-        if azimuth_1 != None and azimuth_2 != None:
+        if azimuth_1 is not None and azimuth_2 is not None:
 
             operator = np.logical_and if azimuth_1 < azimuth_2 else np.logical_or
 
@@ -379,7 +379,7 @@ class Raster:
     def add_to_buffer(self, in_array, report = False):
 
         try: in_array[self.mask] = self.fill
-        except: pass #an array may be unmasked 
+        except Exception: pass #an array may be unmasked 
 
         y_in = slice(*self.inside_window_slice[0])
         x_in = slice(*self.inside_window_slice[1])
@@ -429,7 +429,7 @@ class Raster:
 
                 return ( c ,  total )
 
-            except: #unmasked array
+            except Exception: #unmasked array
                 return (np.count_nonzero(m_in), m_in.size) 
     
     
@@ -465,12 +465,12 @@ class Raster:
         try:
             ds.GetRasterBand(1).WriteArray(self.result )
             ds = None
-        except: pass
+        except Exception: pass
     
 
        
 
-	  
+
 
     
         

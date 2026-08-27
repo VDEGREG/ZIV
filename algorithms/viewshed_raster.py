@@ -140,10 +140,10 @@ class ViewshedRaster(QgsProcessingAlgorithm):
                  
              <a href='https://ko-fi.com/D1D41HYSW' target='_blank'><img height='30' style='border:0px;height:36px;' src='{curr_dir}/kofi2.webp' /></a>
             
-			 <b>This GIS tool is intended for peaceful use !</b>
-			<img height='80' style='border:0px;height:36px;' src='{curr_dir}/ukraine.png'/>
-			
-			""") 
+             <b>This GIS tool is intended for peaceful use !</b>
+            <img height='80' style='border:0px;height:36px;' src='{curr_dir}/ukraine.png'/>
+
+            """) 
 
         return h            
 
@@ -179,7 +179,7 @@ class ViewshedRaster(QgsProcessingAlgorithm):
         # [this can be confusing when the module is used in a script,
         #  and it's 3.0 function ]
         #coef = QgsUnitTypes.fromUnitToUnitFactor(Qgis.DistanceMeters, dem.crs().mapUnits())
-		
+
         #searchRadius = searchRadius * coef
 
 # --------------- verification of inputs ------------------
@@ -301,8 +301,8 @@ class ViewshedRaster(QgsProcessingAlgorithm):
                                     ) / 60, 2)) + " minutes."
               " \n.      RESULTS \n Point_ID, visible pixels, total pixels" )
         
-        for l in report:
-            txt = txt + "\n" + ' , '.join(str(x) for x in l)
+        for row in report:
+            txt = txt + "\n" + ' , '.join(str(x) for x in row)
 
         # TODO : write to Results viewer !!
         QgsMessageLog.logMessage( txt, "Viewshed info")

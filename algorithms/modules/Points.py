@@ -97,13 +97,13 @@ class Points:
     """
     def test_fields(self, field_list):
         
-        l=[]
+        missing = []
         f_in = self.layer.fields()
         
         for e in field_list:
             try: f_in.field(e)
-            except:  l.append(e)
-        return l   
+            except Exception:  missing.append(e)
+        return missing
         
 ##        for defs in iter(FIELDS.items()): 
 ##            f = defs[0]
@@ -165,7 +165,7 @@ class Points:
 
             if self.project_crs:
                 try: t = transf.transform(t)
-                except: continue #in case of wrong coords etc.. 
+                except Exception: continue #in case of wrong coords etc.. 
                 
             x_geog, y_geog= t
 
@@ -175,16 +175,16 @@ class Points:
             key  = feat.id()
 
             try: id1 = feat[field_ID]
-            except: id1 = key
+            except Exception: id1 = key
                 
             #addition for possible field values.
             #override with fixed parameters in case of problem 
             
             try : z = float(feat[field_zobs])
-            except: z=z_obs
+            except Exception: z=z_obs
 
             try : r = float(feat[field_radius]) 
-            except: r=radius
+            except Exception: r=radius
                 
             # obligatory prarameters        
             self.pt[key]={"id":id1, "z":z ,  "radius" : r,
@@ -193,14 +193,14 @@ class Points:
             # optional
             if z_targ or field_ztarg:
                 try : self.pt[key]["z_targ"] = float(feat[field_ztarg])
-                except: self.pt[key]["z_targ"]=z_targ
+                except Exception: self.pt[key]["z_targ"]=z_targ
 
             if folder:
                 self.pt[key]["path"] = path.join(folder, str(id1) + ".tif")
 
             if field_radius_in:
                 try: self.pt[key]["radius_in"] = float(feat[field_radius_in])
-                except: self.pt[key]["radius_in"] = 0
+                except Exception: self.pt[key]["radius_in"] = 0
             
             if  field_azim_1 and field_azim_2:
                 
@@ -212,7 +212,7 @@ class Points:
                     if 0 <= t1 <= 360 and 0 <= t2 <= 360: a1, a2 = t1, t2 
                     else: errors.append("Azimuth angle out of range, point " + str(id1))  
                     
-                except: errors.append("Data error for azimuth, point " + str(id1))        
+                except Exception: errors.append("Data error for azimuth, point " + str(id1))        
                 
  
                 self.pt[key]["azim_1"], self.pt[key]["azim_2"] =a1, a2
@@ -231,7 +231,7 @@ class Points:
                         errors.append("Angles not compatible" + str(t1) + " and" + str(t2) + "Point:" + str(id1))
                     else: a1, a2 = t1, t2 
                                 
-                except: errors.append("Data error for angular mask, point " + str(id1))   
+                except Exception: errors.append("Data error for angular mask, point " + str(id1))   
                 
                 #perhaps the reversed angles could be useful, e.g. an obstacle  ?
                 
@@ -247,7 +247,7 @@ class Points:
 
         if errors:
             txt = "ERRORS in observer point parameters :\n."
-            for l in errors: txt += "\n" + l
+            for line in errors: txt += "\n" + line
 
             QgsMessageLog.logMessage( txt, "Viewshed info")
     
@@ -304,7 +304,7 @@ class Points:
     """
     Returns a dict of points, prepared for visibilty analysis
     All values are expressed in pixel offsets.
-	
+
 
     To make it robust: everything is in try - except blocks,
     use test_fields( ..) to check!
@@ -317,11 +317,11 @@ class Points:
 
         
         bounding_box = QgsRectangle(*extent) #* unpacks an argument list     
-		
+
 
         if not spatial_index: #for intersect, not very helpful ...?
             s_index =  QgsSpatialIndex(self.layer.getFeatures())
-			            
+
         else: s_index = spatial_index
 
         ids = s_index.intersects(bounding_box)

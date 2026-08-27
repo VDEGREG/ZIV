@@ -170,7 +170,7 @@ def viewshed_raster (option, point, dem, interpolate = True):
     try :
         if point["z_targ"] >0:
             target_matrix = (data + point["z_targ"]) / distance_matrix
-    except: pass
+    except Exception: pass
                             
 
     data /= distance_matrix #all one line = (data -z - mxcurv) /mx_dist
@@ -278,7 +278,7 @@ def viewshed_raster (option, point, dem, interpolate = True):
         a1 = np.tan(np.radians(point["angle_up"])) * dem.pix   
         a2 = np.tan(np.radians(point["angle_down"])) * dem.pix
         mx_vis[np.logical_or(data > a1, data < a2)] = 0 
-    except : pass
+    except Exception: pass
     
 
     if option == DEPTH:
@@ -393,7 +393,7 @@ def intervisibility (point_class, raster_class, interpolate = False):
     p=point_class
 
     try: tgs = p["targets"]
-    except: return None
+    except Exception: return None
 
     x,y= p["pix_coord"];  z= p["z"]
     
@@ -423,7 +423,7 @@ def intervisibility (point_class, raster_class, interpolate = False):
         x2, y2 = tgs[id2]["pix_coord"]
 
         try: z_targ = tgs[id2]["z_targ"]
-        except : z_targ = 0
+        except Exception: z_targ = 0
 
         # special case : zero or one pixel distance
         if x-1 <= x2 <= x+1 and y-1 <= y2 <= y+1:
@@ -643,7 +643,7 @@ def visibility_index (raster, obs_height,
             # this is clumsy : curvature is assigned to master window
             # (set before calling this function)
             try: curv = raster.curvature[int(radius) + y, int(radius) + x]
-            except: curv = 0
+            except Exception: curv = 0
             
     
            # a is shifted, b is the origin point    
@@ -688,12 +688,12 @@ def visibility_index (raster, obs_height,
         try:
             feedback.setProgressText(info)
             feedback.setProgress(cnt/sample * 100)
-        except: pass    
+        except Exception: pass    
 
     try: 
         QgsMessageLog.logMessage(" Finished: " + str( round( (time.clock() - start) / 60, 2)) +
                                  " minutes."  ,   "Viewshed info 2")
-    except: pass
+    except Exception: pass
 
     out /= mx_norm
 

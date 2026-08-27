@@ -32,6 +32,7 @@ deprecated=False
 
 changelog= 1.2.1 - Cleared the two blocking findings of the plugin repository security scan.
     Removed the dependency installer, which shelled out to cmd.exe and pip through two .bat scripts: that tripped FILE_SUSPICIOUS (executable files in the package) and Bandit B603 / B607 (process execution). requests and numpy ship with QGIS, so the installer never actually ran; a missing package is now simply reported in the log. install_pip_packages.bat, py3-env.bat and requirements.txt are gone.
+    Cleared the 54 code-quality findings of the repository scan, all of them in the vendored Visibility Analysis code: 21 bare except handlers now name Exception (E722), a comparison to None uses `is not None` (E711), three variables named `l` were renamed (E741), and tab indentation was converted to spaces (E101, W191). Verified against a reference viewshed run: the output rasters are byte-identical before and after, so no numeric result changed.
     Fixed Flake8 F821 in algorithms/modules/visibility.py: min_index was read before being assigned, a NameError waiting for the first pixel of a run with an error of 1 or more. Inherited from the upstream Visibility Analysis code.
     1.2.0 - Release prepared for the official QGIS plugin repository.
     Plugin renamed for display: "Zones d'influence visuelle (ZIV)" (the package folder, the provider ids genziv and pcfr_vis and the QgsSettings namespace are unchanged, so existing Processing models and preferences keep working).

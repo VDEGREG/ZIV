@@ -189,8 +189,8 @@ class ViewshedPoints(QgsProcessingAlgorithm):
                  
              <a href='https://ko-fi.com/D1D41HYSW' target='_blank'><img height='30' style='border:0px;height:36px;' src='{curr_dir}/kofi2.webp' /></a>
             
-			<font size = "+3"> <b>&#9774;</b></font size>This GIS tool is intended for <b>peaceful use !
-			""") 
+            <font size = "+3"> <b>&#9774;</b></font size>This GIS tool is intended for <b>peaceful use !
+            """) 
 
         return h
 
@@ -229,7 +229,7 @@ class ViewshedPoints(QgsProcessingAlgorithm):
         # [this can be confusing when the module is used in a script,
         #  and it's 3.0 function ]
         #coef = QgsUnitTypes.fromUnitToUnitFactor(Qgis.DistanceMeters, dem.crs().mapUnits())
-		
+
         #searchRadius = searchRadius * coef
     
         
