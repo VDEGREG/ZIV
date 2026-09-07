@@ -182,7 +182,7 @@
         <Option type="List" name="HEIGHT">
           <Option type="Map">
             <Option type="int" name="source" value="2"/>
-            <Option type="double" name="static_value" value="0.5"/>
+            <Option type="double" name="static_value" value="2"/>
           </Option>
         </Option>
         <Option type="List" name="INIT">
@@ -231,7 +231,7 @@
         <Option type="List" name="WIDTH">
           <Option type="Map">
             <Option type="int" name="source" value="2"/>
-            <Option type="double" name="static_value" value="0.5"/>
+            <Option type="double" name="static_value" value="2"/>
           </Option>
         </Option>
       </Option>

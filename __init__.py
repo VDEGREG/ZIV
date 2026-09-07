@@ -3,18 +3,11 @@ ZIV_prime - plugin entry point (classFactory, toolbar, dependency check).
 
 Part of ZIV_prime, a GNU GPL v3 (or later) licensed QGIS plugin by G. DELSIGNE.
 
-Third-party origin
-------------------
-The IGN LiDAR HD tile discovery and download logic in this module is derived
-from the open-source QGIS plugin "PointCloudFR" by Samy KHELIL
-(https://github.com/sameeeyy/PointCloudFR), released under the GNU General
-Public License v2 or later. This notice is preserved as required by the GPL.
+Since 1.4.0 the IGN LiDAR HD tile import and since 1.5.0 the visibility engine
+are this plugin's own code (``import_dalles/``, ``moteur_visibilite/``,
+``algorithmes_ziv/``) - no third-party code remains in this package.
 
-The visibility engine used downstream is derived from "Visibility Analysis" by
-Zoran Cuckovic (GNU GPL v3) - see ``algorithms/README.txt``.
-
-See ``LICENSE`` and ``README.md`` at the root of the plugin for the full terms
-and the complete credits.
+See ``LICENSE`` and ``README.md`` at the root of the plugin for the full terms.
 """
 import contextlib
 import importlib.util
@@ -28,7 +21,7 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMessageBox, QToolButton
 
 # Plugin version
-VERSION = "1.2.3"
+VERSION = "1.5.1"
 # Nom affiche a l'utilisateur (fenetres, menu, journal).
 PLUGIN_NAME = "Zones d'influence visuelle (ZIV)"
 # Nom de paquet : dossier installe, espace QgsSettings, dossier temporaire
@@ -257,10 +250,10 @@ class LidarPlugin:
         # resolve `pcfr_vis:*` algorithm ids when it is loaded) ----
         if registry is not None:
             try:
-                from .visibility_provider import PcfrVisibilityProvider
+                from .visibility_provider import ZivVisibilityProvider
 
                 self._register_provider_safe(
-                    "visibility_provider", PcfrVisibilityProvider, registry
+                    "visibility_provider", ZivVisibilityProvider, registry
                 )
             except Exception as e:
                 QgsMessageLog.logMessage(

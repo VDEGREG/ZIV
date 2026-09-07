@@ -7,8 +7,12 @@ Exposes the two visibility algorithms (createviewpoints + viewshed) used by
 the "Création ZIV" processing model so the plugin remains self-contained
 and never collides with a separately-installed visibility provider.
 
-See ``algorithms/LICENSE`` and ``algorithms/README.txt`` for the original
-third-party copyright notice and the full GPL v3 license terms.
+Les deux algorithmes sont propres à ce greffon (``algorithmes_ziv/``, sur le
+moteur ``moteur_visibilite/``). Leur interface, leurs noms de champs et leurs
+conventions de sortie sont ceux de la version d'origine du greffon, pour que
+``creation_ziv.model3`` fonctionne sans retouche. L'identifiant ``pcfr_vis``
+est conservé pour la même raison : c'est une identité technique sur laquelle
+des modèles Processing enregistrés peuvent compter.
 """
 
 from pathlib import Path
@@ -16,11 +20,11 @@ from pathlib import Path
 from qgis.core import QgsProcessingProvider
 from qgis.PyQt.QtGui import QIcon
 
-from .algorithms.viewshed_points import ViewshedPoints
-from .algorithms.viewshed_raster import ViewshedRaster
+from .algorithmes_ziv.points_de_vue import ViewshedPoints
+from .algorithmes_ziv.visibilite_raster import ViewshedRaster
 
 
-class PcfrVisibilityProvider(QgsProcessingProvider):
+class ZivVisibilityProvider(QgsProcessingProvider):
     """Internal provider for the visibility algorithms used by the
     ZIV_prime plugin.
     """

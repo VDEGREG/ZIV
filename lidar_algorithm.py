@@ -1,20 +1,15 @@
 """
-ZIV_prime - IGN LiDAR HD download and ZIV Processing algorithm.
+ZIV_prime - IGN LiDAR HD import and ZIV Processing algorithm.
 
 Part of ZIV_prime, a GNU GPL v3 (or later) licensed QGIS plugin by G. DELSIGNE.
 
-Third-party origin
-------------------
-The IGN LiDAR HD tile discovery and download logic in this module is derived
-from the open-source QGIS plugin "PointCloudFR" by Samy KHELIL
-(https://github.com/sameeeyy/PointCloudFR), released under the GNU General
-Public License v2 or later. This notice is preserved as required by the GPL.
+Since 1.4.0 the IGN LiDAR HD tile import (discovery, download, mosaicking) is
+this plugin's own code, in ``import_dalles/``. Since 1.5.0 the visibility
+engine and the two Processing algorithms are likewise original code, in
+``moteur_visibilite/`` and ``algorithmes_ziv/`` - no third-party code remains
+in this package.
 
-The visibility engine used downstream is derived from "Visibility Analysis" by
-Zoran Cuckovic (GNU GPL v3) - see ``algorithms/README.txt``.
-
-See ``LICENSE`` and ``README.md`` at the root of the plugin for the full terms
-and the complete credits.
+See ``LICENSE`` and ``README.md`` at the root of the plugin for the full terms.
 """
 import concurrent.futures
 import contextlib
@@ -59,6 +54,7 @@ from qgis.core import (
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterNumber,
     QgsProcessingParameterRasterDestination,
+    QgsProcessingParameterVectorDestination,
     QgsProject,
     QgsRasterLayer,
     QgsRasterShader,
@@ -73,9 +69,19 @@ from qgis.PyQt.QtGui import QColor, QFont
 from qgis.PyQt.QtWidgets import QMessageBox
 from requests.adapters import HTTPAdapter, Retry
 
+from .import_dalles import adaptateur as import_dalles
+
 
 # Nom affiche a l'utilisateur (journal, fenetres, titre de carte).
 PLUGIN_DISPLAY_NAME = "Zones d'influence visuelle (ZIV)"
+
+# Hauteur de l'observateur pour la ZIV : intitulé et valeur par défaut.
+# Ce sont des constantes de module, et non des littéraux dans initAlgorithm,
+# pour qu'un greffon hôte puisse les adapter à son usage sans toucher à ce
+# fichier — par exemple remplacer le libellé par « Hauteur des panneaux en
+# (m) » et la valeur par défaut par 4,3 m.
+ZIV_HAUTEUR_LIBELLE = "ZIV : hauteur de l'observateur (en mètres)"
+ZIV_HAUTEUR_DEFAUT = 1.7
 
 
 class DownloadProgressTracker:
@@ -196,6 +202,7 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
     ZIV_RADIUS = "ZIV_RADIUS"
     ZIV_PANEL_HEIGHT = "ZIV_PANEL_HEIGHT"
     ZIV_OUTPUT = "ZIV_OUTPUT"
+    RADIUS_OUTPUT = "RADIUS_OUTPUT"
     ZIV_SYMBOLOGY = "ZIV_SYMBOLOGY"
     # v3.11.0/v3.13.0: photo viewpoints - opt-in checkbox + number of
     # camera locations generated on the most visible sectors of the ZIV.
@@ -276,6 +283,9 @@ Rayon d'analyse (m) :
   téléchargement ET de rayon d'analyse pour le calcul de la ZIV.
 - Un shapefile du buffer est généré et affiché avec un contour
   rouge en pointillés (remplissage transparent).
+- « Sortie du rayon d'analyse » fixe où écrire cette couche (.shp, .gpkg
+  ou .geojson) ; laissée vide, elle suit le dossier de travail, qui est
+  temporaire quand la sortie ZIV l'est aussi.
 
 Fusionner les dalles :
 - Force la fusion des dalles MNT/MNS/MNH téléchargées en un raster unique.
@@ -377,9 +387,9 @@ Créer la ZIV :
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.ZIV_PANEL_HEIGHT,
-                self.tr("ZIV : hauteur de l'observateur (en mètres)"),
+                self.tr(ZIV_HAUTEUR_LIBELLE),
                 type=QgsProcessingParameterNumber.Type.Double,
-                defaultValue=1.7,
+                defaultValue=ZIV_HAUTEUR_DEFAUT,
                 minValue=0.1,
                 maxValue=500.0,
                 optional=False,
@@ -441,6 +451,23 @@ Créer la ZIV :
             QgsProcessingParameterRasterDestination(
                 self.ZIV_OUTPUT,
                 self.tr("Sortie ZIV (raster) - laisser vide pour temporaire"),
+                optional=True,
+                createByDefault=False,
+            )
+        )
+
+        # Rayon d'analyse - couche vecteur du tampon. Sans chemin explicite le
+        # fichier suit le dossier de travail, qui est un dossier temporaire du
+        # systeme quand la ZIV elle-meme est temporaire : l'utilisateur ne le
+        # retrouvait pas. Ce parametre lui laisse le choix de la destination.
+        self.addParameter(
+            QgsProcessingParameterVectorDestination(
+                self.RADIUS_OUTPUT,
+                self.tr(
+                    "Sortie du rayon d'analyse (vecteur) - laisser vide pour "
+                    "le dossier de travail"
+                ),
+                type=QgsProcessing.SourceType.TypeVectorPolygon,
                 optional=True,
                 createByDefault=False,
             )
@@ -619,7 +646,11 @@ Créer la ZIV :
             return False
 
     def _save_buffer_shapefile(
-        self, geom: QgsGeometry, output_dir: Path, radius: float
+        self,
+        geom: QgsGeometry,
+        output_dir: Path,
+        radius: float,
+        chemin_demande: str = "",
     ) -> str:
         """Save the analysis buffer geometry as a Shapefile in EPSG:2154.
 
@@ -629,25 +660,61 @@ Créer la ZIV :
         Windows: GDAL cannot overwrite a file currently locked by an open
         layer in the project).
 
+        ``chemin_demande`` (parametre RADIUS_OUTPUT) court-circuite ce nom
+        horodate : l'utilisateur choisit sa destination, donc il choisit
+        d'ecraser. Le pilote OGR est deduit de l'extension qu'il a saisie.
+        Si l'ecriture echoue, c'est presque toujours ce verrou Windows qu'il
+        faut nommer au journal, sinon le message reste incomprehensible.
+
         Returns the output path on success, '' otherwise.
         """
         writer = None
         output_path = None
+        # Un chemin explicite ecrase le fichier existant, ce que GDAL refuse
+        # sous Windows tant que la couche reste ouverte dans QGIS.
+        indice_verrou = (
+            "Rayon d'analyse : fichier probablement verrouille par une couche "
+            "encore ouverte dans QGIS. La retirer du projet, ou laisser la "
+            "sortie vide pour obtenir un nom horodate."
+        )
         try:
             crs = QgsCoordinateReferenceSystem("EPSG:2154")
             fields = QgsFields()
             fields.append(QgsField("name", QVariant.String, len=50))
             fields.append(QgsField("radius_m", QVariant.Double))
 
-            # Unique filename for this run -> no collision with a still-open
-            # layer from a previous execution.
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = (
-                output_dir / f"rayon_analyse_{int(round(radius))}m_{timestamp}.shp"
-            )
+            if chemin_demande:
+                output_path = Path(chemin_demande)
+                pilote = QgsVectorFileWriter.driverForExtension(output_path.suffix)
+                if not pilote:
+                    pilote = "ESRI Shapefile"
+                    self.logger.warning(
+                        "Extension '%s' non reconnue pour le rayon d'analyse : "
+                        "ecriture en ESRI Shapefile vers %s."
+                        % (output_path.suffix, output_path.with_suffix(".shp"))
+                    )
+                    output_path = output_path.with_suffix(".shp")
+                with contextlib.suppress(Exception):
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                # Un chemin explicite ecrase le fichier du tir precedent. Si la
+                # couche de ce tir est encore chargee, GDAL detruit d'abord les
+                # fichiers annexes du shapefile (.shx, .prj, .cpg) PUIS echoue
+                # sur le verrou Windows : l'utilisateur perdait le fichier qu'il
+                # avait deja obtenu, et n'obtenait pas le nouveau. Le nom
+                # horodate de la branche « sans chemin » evite ce cas par
+                # construction ; ici il faut liberer le verrou nous-memes.
+                self._liberer_couche_du_projet(output_path)
+            else:
+                # Unique filename for this run -> no collision with a still-open
+                # layer from a previous execution.
+                pilote = "ESRI Shapefile"
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_path = (
+                    output_dir / f"rayon_analyse_{int(round(radius))}m_{timestamp}.shp"
+                )
 
             options = QgsVectorFileWriter.SaveVectorOptions()
-            options.driverName = "ESRI Shapefile"
+            options.driverName = pilote
             options.fileEncoding = "UTF-8"
 
             writer = QgsVectorFileWriter.create(
@@ -662,12 +729,16 @@ Créer la ZIV :
                 self.logger.error(
                     f"QgsVectorFileWriter returned None for: {output_path}"
                 )
+                if chemin_demande:
+                    self.logger.error(indice_verrou)
                 return ""
             if writer.hasError() != QgsVectorFileWriter.WriterError.NoError:
                 self.logger.error(
                     f"Could not create buffer SHP at {output_path}: "
                     f"{writer.errorMessage()}"
                 )
+                if chemin_demande:
+                    self.logger.error(indice_verrou)
                 return ""
 
             feat = QgsFeature(fields)
@@ -681,17 +752,27 @@ Créer la ZIV :
                     f"{writer.errorMessage()}"
                 )
 
-            # Final sanity check
-            if not output_path.exists() or output_path.stat().st_size == 0:
-                self.logger.error(
-                    f"Buffer SHP missing or empty after write: {output_path}"
-                )
+            # Le tampon d'OGR n'atteint le disque qu'a la DESTRUCTION du
+            # graveur. Tant que cette fonction n'ecrivait qu'en ESRI Shapefile,
+            # verifier avant la destruction tenait par accident : le .shp porte
+            # son en-tete de 100 octets des la creation. RADIUS_OUTPUT ouvre la
+            # destination aux extensions du selecteur de Processing, dont une
+            # douzaine (.kml, .fgb, .xlsx, .parquet, .tab, .ods...) sont servies
+            # par des pilotes qui n'ecrivent rien avant la fermeture : le
+            # controle rendait '' sur une ecriture parfaitement reussie.
+            del writer
+            writer = None
+
+            output_path = self._fichier_rayon_produit(output_path)
+            if output_path is None:
                 return ""
 
             self.logger.info(f"Analysis buffer saved to: {output_path}")
             return str(output_path)
         except Exception as e:
             self.logger.error(f"Error saving buffer shapefile: {e}")
+            if chemin_demande:
+                self.logger.error(indice_verrou)
             import traceback
 
             self.logger.error(traceback.format_exc())
@@ -701,6 +782,70 @@ Créer la ZIV :
             # (audit fix M-7).
             with contextlib.suppress(Exception):
                 del writer
+
+    def _liberer_couche_du_projet(self, chemin: Path) -> None:
+        """Retire du projet les couches dont la source est `chemin`.
+
+        Appelee juste avant de reecrire a un chemin choisi par l'utilisateur.
+        Sans elle, GDAL detruit les fichiers annexes du shapefile precedent
+        avant d'echouer sur le verrou que pose la couche encore chargee : le
+        livrable deja obtenu devient illisible, sans SCR, et aucun nouveau n'est
+        produit. Meilleur effort : un echec ici ne doit rien empecher.
+        """
+        try:
+            cible = os.path.normcase(os.path.abspath(str(chemin)))
+            a_retirer = []
+            for identifiant, couche in QgsProject.instance().mapLayers().items():
+                # Une source GPKG porte « chemin|layername=... » : seul le
+                # chemin nous interesse pour reconnaitre le fichier verrouille.
+                source = (couche.source() or "").split("|", 1)[0]
+                if not source:
+                    continue
+                with contextlib.suppress(Exception):
+                    if os.path.normcase(os.path.abspath(source)) == cible:
+                        a_retirer.append((identifiant, couche.name()))
+            for identifiant, nom in a_retirer:
+                QgsProject.instance().removeMapLayer(identifiant)
+                self.logger.info(
+                    f"Rayon d'analyse : couche « {nom} » retirée du projet pour "
+                    f"libérer {chemin.name} avant réécriture."
+                )
+        except Exception as e:
+            self.logger.warning(
+                f"Could not release layers holding {chemin}: {e}"
+            )
+
+    def _fichier_rayon_produit(self, demande: Path):
+        """Rend le fichier reellement ecrit, ou None si rien ne l'a ete.
+
+        QGIS ajoute l'extension canonique du pilote quand celle saisie n'en est
+        pas une : « rayon.json » est reconnu par `driverForExtension` comme du
+        GeoJSON — donc pas de repli sur le Shapefile — mais le fichier produit
+        s'appelle « rayon.json.geojson ». Verifier le chemin demande rendait
+        alors '' sur une ecriture reussie, et le journal citait un chemin
+        inexistant sans jamais nommer le fichier obtenu.
+        """
+        with contextlib.suppress(OSError):
+            if demande.exists() and demande.stat().st_size > 0:
+                return demande
+
+        # Le pilote a renomme la cible : chercher « <nom demande>.<canonique> ».
+        candidats = []
+        with contextlib.suppress(OSError):
+            candidats = [
+                c for c in demande.parent.glob(demande.name + ".*")
+                if c.is_file() and c.stat().st_size > 0
+            ]
+        if candidats:
+            produit = max(candidats, key=lambda c: c.stat().st_size)
+            self.logger.info(
+                f"Rayon d'analyse : le pilote a écrit {produit.name} "
+                f"(extension canonique ajoutée à {demande.name})."
+            )
+            return produit
+
+        self.logger.error(f"Buffer SHP missing or empty after write: {demande}")
+        return None
 
     def _apply_red_dashed_style(self, layer: QgsVectorLayer) -> None:
         """Apply a red-dashed outline / transparent fill style to a polygon layer."""
@@ -866,6 +1011,75 @@ Créer la ZIV :
         layer.triggerRepaint()
         self.logger.info("ZIV symbology: translucent red (uniform)")
 
+    def _caler_emprise_sur_le_mnt(self, zip_source, dem_path):
+        """Reprojette l'emprise projet dans le systeme du MNS et verifie le recouvrement.
+
+        Renvoie une couche prete pour le modele, ou None si l'emprise ne touche
+        pas le MNS — auquel cas il n'y a rien a calculer, et le dire vaut mieux
+        que produire un raster vide de plusieurs dizaines de gigaoctets.
+        """
+        try:
+            mnt = QgsRasterLayer(str(dem_path), "mns_controle")
+            if not mnt.isValid():
+                self.logger.warning(
+                    "MNS illisible pour le calage de l'emprise : le modele recoit "
+                    "l'emprise telle quelle."
+                )
+                return zip_source
+
+            couche = zip_source
+            if not isinstance(couche, QgsVectorLayer):
+                couche = QgsVectorLayer(str(zip_source), "emprise_projet", "ogr")
+            if not couche.isValid():
+                self.logger.warning("Emprise projet illisible : passee telle quelle.")
+                return zip_source
+
+            scr_mnt = mnt.crs()
+            if couche.crs() != scr_mnt:
+                self.logger.info(
+                    "Emprise projet en %s, MNS en %s : reprojection avant la ZIV."
+                    % (couche.crs().authid(), scr_mnt.authid())
+                )
+                transformation = QgsCoordinateTransform(
+                    couche.crs(), scr_mnt, QgsProject.instance()
+                )
+                calee = QgsVectorLayer(
+                    "Polygon?crs=" + scr_mnt.authid(), "emprise_projet_calee", "memory"
+                )
+                calee.dataProvider().addAttributes(couche.fields())
+                calee.updateFields()
+                entites = []
+                for entite in couche.getFeatures():
+                    geometrie = entite.geometry()
+                    if geometrie.isEmpty():
+                        continue
+                    geometrie.transform(transformation)
+                    copie = QgsFeature(calee.fields())
+                    copie.setGeometry(geometrie)
+                    copie.setAttributes(entite.attributes())
+                    entites.append(copie)
+                if not entites:
+                    self.logger.error("Emprise projet vide apres reprojection.")
+                    return None
+                calee.dataProvider().addFeatures(entites)
+                calee.updateExtents()
+                couche = calee
+
+            if not couche.extent().intersects(mnt.extent()):
+                self.logger.error(
+                    "L'emprise projet (%s) ne recoupe pas le MNS (%s), dans le meme "
+                    "systeme de coordonnees. Rien a calculer : verifier le systeme de "
+                    "coordonnees de la couche d'emprise."
+                    % (couche.extent().toString(0), mnt.extent().toString(0))
+                )
+                return None
+            return couche
+        except Exception as erreur:
+            self.logger.warning(
+                "Calage de l'emprise impossible (%s) : passee telle quelle." % erreur
+            )
+            return zip_source
+
     def _run_ziv_model(
         self,
         dem_path: str,
@@ -909,6 +1123,17 @@ Créer la ZIV :
                 f"Running ZIV model (radius={ziv_radius} m, "
                 f"observer_height={ziv_panel_height} m)"
             )
+            # L'emprise projet DOIT etre dans le systeme du MNS. Le modele ne la
+            # reprojette pas : le tampon reste dans son systeme d'origine, le
+            # rasterise aussi, et gdal:merge fait ensuite l'union de deux rasters
+            # distants de centaines de kilometres. Mesure : une emprise en Web
+            # Mercator au lieu du Lambert 93 produit une ZIV de 94 638 x 320 342
+            # cellules, soit 113 Go — pour un calcul de 6 x 6 km.
+            emprise_calee = self._caler_emprise_sur_le_mnt(zip_source, dem_path)
+            if emprise_calee is None:
+                return ""
+            params["zip"] = emprise_calee
+
             result = processing.run(model, params, feedback=self.feedback)
 
             ziv_result_path = result.get("zone_dinfluence_visuelle_ziv", "")
@@ -1060,6 +1285,10 @@ Créer la ZIV :
         buffer_layer = None
         buffer_shp = getattr(self, "_buffer_shp_path", "")
         radius = getattr(self, "_ziv_radius", 0.0) or 0.0
+        # Sortie declaree, pour que Processing et les modeles voient le fichier.
+        radius_written = getattr(self, "_radius_written_path", "")
+        if radius_written:
+            result_dict[self.RADIUS_OUTPUT] = radius_written
         if buffer_shp:
             # Layer name carries the radius the user typed, e.g.
             # "Rayon d'analyse - 300 m" - also stored as field `radius_m`.
@@ -1161,108 +1390,20 @@ Créer la ZIV :
     def _mask_ziv_landcover(
         self, ziv_path: str, requested_output: str = ""
     ) -> str:
-        """Burn 0 ("hors visibilité") into the ZIV wherever a forest
-        (BD Forêt) or a building (BDTOPO batiment) footprint sits.
+        """Force « hors visibilité » sous les forêts et les bâtiments.
 
-        Rationale: with an MNS the viewshed treats tree canopy and roof
-        tops as elevated surfaces that "see" the panels, producing
-        visibility artefacts over places where no observer ever stands.
+        Délégué à `masquage.py`, écrit pour ce greffon. Sur un MNS, la canopée
+        et les toitures « voient » le projet alors que personne ne s'y tient :
+        ces cellules sont des artefacts.
 
-        Method (v3.9.3): we work on a COPY of the ZIV and use
-        `gdal:rasterize_over_fixed_value` to burn the value 0 directly
-        into that raster, on its own native grid. This deliberately
-        avoids the previous mask-raster + gdal:rastercalculator approach,
-        which kept turning the whole ZIV to NoData: gdal:rasterize always
-        flags 0 as NoData on the mask, and rastercalculator then
-        propagated that NoData over the entire output. Burning in place
-        sidesteps NoData, grid-alignment and dimension issues entirely.
-
-        Best-effort: any failure (offline, no coverage, GDAL error)
-        logs a warning and returns the unmodified ZIV path.
-
-        If `requested_output` is set, the masked raster is produced there
-        so the output contract is honoured (the burn is in place, so we
-        copy the ZIV to that path first and burn into it).
+        Meilleur effort : hors couverture, WFS indisponible ou erreur GDAL, on
+        prévient et la ZIV est rendue telle quelle.
         """
-        try:
-            import processing
-            from . import ign_data
+        from . import masquage
 
-            src = Path(ziv_path)
-            if not src.exists():
-                return ziv_path
-            ziv = QgsRasterLayer(ziv_path, "_ziv_mask_src")
-            if not ziv.isValid():
-                self.logger.warning(
-                    "Masquage forêt/bâti : raster ZIV invalide - ignoré."
-                )
-                return ziv_path
-            extent = ziv.extent()
-            work_dir = src.parent
-
-            # Burn happens IN PLACE, so always operate on a copy - never
-            # the original ZIV temp. Put it at the user-requested path if
-            # one was given.
-            masked_out = (
-                Path(requested_output)
-                if requested_output
-                else work_dir / f"{src.stem}_masque.tif"
-            )
-            try:
-                shutil.copyfile(str(src), str(masked_out))
-            except Exception as cp_err:
-                self.logger.warning(
-                    f"Masquage : copie de la ZIV échouée ({cp_err}) - "
-                    "ZIV inchangée."
-                )
-                return ziv_path
-
-            targets = [
-                (ign_data.WFS_BUILDINGS, "batiments"),
-                (ign_data.WFS_FOREST, "foret"),
-            ]
-            burned = 0
-            for type_name, stem in targets:
-                geojson = work_dir / f"_ziv_mask_{stem}.geojson"
-                if not ign_data._download_wfs_layer(
-                    extent, type_name, geojson, self.logger
-                ):
-                    continue
-                vec = QgsVectorLayer(str(geojson), f"_fp_{stem}", "ogr")
-                if not vec.isValid() or vec.featureCount() == 0:
-                    continue
-                # Burn 0 ("hors visibilité") into the ZIV copy via the GDAL
-                # Python API (NOT the QGIS gdal:rasterize_over* wrapper,
-                # which crashed QGIS in the Processing worker thread).
-                if ign_data.burn_into_raster_inplace(
-                    str(masked_out), str(geojson),
-                    burn_value=0.0, add=False, logger=self.logger,
-                ):
-                    burned += 1
-                else:
-                    self.logger.warning(
-                        f"Masquage : burn {stem} échoué."
-                    )
-
-            if burned == 0:
-                self.logger.info(
-                    "Masquage forêt/bâti : aucune empreinte appliquée "
-                    "(hors couverture ou WFS indisponible)."
-                )
-                # masked_out is a plain copy of the ZIV. Keep it only if
-                # the caller asked for a specific output path.
-                return str(masked_out) if requested_output else ziv_path
-
-            self.logger.info(
-                f"Masquage forêt/bâti appliqué ({burned} couche(s), "
-                f"burn 0 sur place) -> {masked_out}"
-            )
-            return str(masked_out)
-        except Exception as e:
-            self.logger.warning(
-                f"Masquage forêt/bâti échoué ({e}) - ZIV inchangée."
-            )
-            return ziv_path
+        return masquage.masquer_foret_et_bati(
+            ziv_path, requested_output, self.logger
+        )
 
     def _generate_photo_viewpoints(self, ziv_path: str):
         """Generate camera locations ("points de vue photo") on the most
@@ -1304,7 +1445,7 @@ Créer la ZIV :
             import numpy as np
             from osgeo import gdal, ogr
 
-            from . import ign_data
+            from . import donnees_ign
 
             gdal.UseExceptions()
             ds = gdal.Open(str(ziv_path))
@@ -1340,8 +1481,8 @@ Créer la ZIV :
             # ---- Candidate mask: roads + buffered buildings ----------
             cand_sources = []
             roads_geojson = work_dir / "_pv_routes.geojson"
-            if ign_data._download_wfs_layer(
-                extent, ign_data.WFS_ROADS, roads_geojson, self.logger
+            if donnees_ign.telecharger_couche(
+                extent, donnees_ign.COUCHE_ROUTES, roads_geojson, self.logger
             ):
                 cand_sources.append(str(roads_geojson))
             # Buildings: reuse the footprints already downloaded by the
@@ -1349,8 +1490,8 @@ Créer la ZIV :
             bati_geojson = Path(ziv_path).parent / "_ziv_mask_batiments.geojson"
             if not bati_geojson.exists():
                 bati_geojson = work_dir / "_pv_batiments.geojson"
-                if not ign_data._download_wfs_layer(
-                    extent, ign_data.WFS_BUILDINGS, bati_geojson,
+                if not donnees_ign.telecharger_couche(
+                    extent, donnees_ign.COUCHE_BATIMENTS, bati_geojson,
                     self.logger,
                 ):
                     bati_geojson = None
@@ -2077,97 +2218,20 @@ Créer la ZIV :
     def _query_wfs_tiles(
         self, aoi_geometry: QgsGeometry, data_type_code: str
     ) -> List[dict]:
-        """Query WFS service with strict EPSG:2154 projection."""
+        """Découverte des dalles — déléguée au moteur d'import embarqué.
+
+        L'AOI est déjà reprojetée en EPSG:2154 par processAlgorithm. Le contrat
+        de sortie est inchangé (`url` / `name` / `geometry` / `properties`), et
+        l'erreur reste non bloquante : une liste vide, et le motif au journal.
+        """
+        bbox = aoi_geometry.boundingBox()
+        emprise = (bbox.xMinimum(), bbox.yMinimum(), bbox.xMaximum(), bbox.yMaximum())
         try:
-            self.logger.info(f"Querying WFS for data type: {data_type_code}")
-
-            # URL du service WFS de la Géoplateforme IGN
-            wfs_url = "https://data.geopf.fr/wfs/ows"
-
-            # The AOI is always re-projected to EPSG:2154 by processAlgorithm
-            # BEFORE this method is called. QgsGeometry has no sourceCrs()
-            # method so the previous defensive reprojection block was dead
-            # code (audit fix I-3). We just compute the bbox.
-            bbox = aoi_geometry.boundingBox()
-
-            # 3. Construct parameters with explicit coordinate reference system
-            # The URN 'urn:ogc:def:crs:EPSG::2154' is crucial for WFS 2.0
-            params = {
-                "SERVICE": "WFS",
-                "VERSION": "2.0.0",
-                "REQUEST": "GetFeature",
-                "TYPENAME": data_type_code,
-                "OUTPUTFORMAT": "application/json",
-                "SRSNAME": "EPSG:2154",  # Explicitly ask for response in Lambert-93
-            }
-
-            # BBOX format: minx,miny,maxx,maxy,CRS_URN
-            params["BBOX"] = (
-                f"{bbox.xMinimum()},{bbox.yMinimum()},"
-                f"{bbox.xMaximum()},{bbox.yMaximum()},"
-                "urn:ogc:def:crs:EPSG::2154"
+            return import_dalles.dalles_geoplateforme(
+                emprise, data_type_code, journal=self.logger
             )
-
-            self.logger.info(f"WFS Query URL: {wfs_url}")
-            self.logger.info(f"BBOX: {params['BBOX']}")
-
-            try:
-                response = requests.get(
-                    wfs_url, params=params, timeout=120
-                )
-                response.raise_for_status()
-
-                # Parse GeoJSON response
-                geojson_data = response.json()
-                if "features" not in geojson_data:
-                    self.logger.warning(
-                        "WFS returned valid response but 0 features found."
-                    )
-                    return []
-
-                tiles = []
-                for feature in geojson_data["features"]:
-                    if "properties" in feature:
-                        properties = feature["properties"]
-                        # The new platform uses 'url' and 'nom' or 'name'
-                        # We check both just in case
-                        url = properties.get("url")
-                        name = properties.get("name", properties.get("nom"))
-
-                        if url and name:
-                            tiles.append(
-                                {
-                                    "url": url,
-                                    "name": name,
-                                    "geometry": feature.get("geometry"),
-                                    "properties": properties,
-                                }
-                            )
-
-                self.logger.info(f"Found {len(tiles)} tiles intersecting the envelope")
-                return tiles
-
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 400:
-                    self.logger.error(
-                        f"WFS 400 Error. The server rejected the request. "
-                        f"Check if layer '{data_type_code}' exists."
-                    )
-                else:
-                    self.logger.error(f"HTTP Error during WFS request: {str(e)}")
-                return []
-
-            except requests.exceptions.RequestException as e:
-                self.logger.error(f"Connection error during WFS request: {str(e)}")
-                return []
-            except (ValueError, KeyError) as e:
-                self.logger.error(f"Error parsing WFS response: {str(e)}")
-                if "response" in locals():
-                    self.logger.error(f"Response snippet: {response.text[:200]}")
-                return []
-
         except Exception as e:
-            self.logger.error(f"Critical error querying WFS: {str(e)}")
+            self.logger.error("Interrogation du WFS impossible : %s" % e)
             return []
 
     def _filter_intersecting_tiles(
@@ -2260,6 +2324,12 @@ Créer la ZIV :
             )
             ziv_output_param = self.parameterAsOutputLayer(
                 parameters, self.ZIV_OUTPUT, context
+            )
+            # Destination choisie pour la couche du rayon d'analyse. Vide : on
+            # retombe sur le dossier de travail et le nom horodate.
+            self._radius_output_path = (
+                self.parameterAsOutputLayer(parameters, self.RADIUS_OUTPUT, context)
+                or ""
             )
 
             # ---- Derive working directory (the old "Output folder") ----
@@ -2472,10 +2542,18 @@ Créer la ZIV :
             # The layer itself is loaded LAST (at the very end of processing)
             # so it ends up on top of every other layer in the QGIS layer tree.
             self._buffer_shp_path = ""
+            # Chemin reellement ecrit, distinct de _buffer_shp_path qui, lui,
+            # ne sert qu'au chargement dans le projet : la sortie declaree doit
+            # etre rendue meme quand le chargement des couches est decoche.
+            self._radius_written_path = ""
             if buffer_geom is not None:
                 shp_path = self._save_buffer_shapefile(
-                    buffer_geom, self._working_dir, buffer_distance
+                    buffer_geom,
+                    self._working_dir,
+                    buffer_distance,
+                    getattr(self, "_radius_output_path", ""),
                 )
+                self._radius_written_path = shp_path
                 if shp_path and load_layer:
                     self._buffer_shp_path = shp_path
 
@@ -2525,6 +2603,29 @@ Créer la ZIV :
 
             # All intersecting tiles are downloaded (no "best tile" mode)
             selected_tiles = self._select_best_tiles(intersecting_tiles)
+
+            # --- Import des produits raster : moteur embarque ----------------
+            # MNT / MNS / MNH passent par import_dalles : dalles demandees au serveur
+            # a la resolution de travail (16 fois moins de volume a 2 m),
+            # georeferencement corrige, mosaique. Le nuage de points (type 3)
+            # garde le chemin d'origine : il ne s'assemble pas comme un raster.
+            if import_dalles.est_raster(data_type):
+                try:
+                    return self._finalize_result(
+                        import_dalles.importer_raster(
+                            self,
+                            selected_tiles,
+                            downloads_dir,
+                            data_type,
+                            self.ZIV_TARGET_RES_M,
+                            fusionner=merge_strategy == 1,
+                            charger_couches=load_layer,
+                        )
+                    )
+                except Exception as e:
+                    self.logger.error("Import des dalles impossible : %s" % e)
+                    return {"OUTPUT_DIRECTORY": str(downloads_dir), "OUTPUT_FILES": ""}
+
 
             # No user-facing concurrency limit - one worker per tile, capped
             effective_workers = max(1, min(len(selected_tiles), max_downloads))
