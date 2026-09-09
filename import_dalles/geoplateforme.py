@@ -8,7 +8,7 @@ permet de le faire tourner sans réseau dans un banc de contrôle.
 Ce que les appels réels du 2026-09-01 ont établi, et sur quoi ce module
 s'appuie :
 
-  * l'`url` d'une dalle n'est pas un fichier mais une requête WMS GetMap
+  * l'URL d'une dalle n'est pas un fichier mais une requête WMS GetMap
     (`FORMAT=image/geotiff`, `WIDTH=HEIGHT=2000` pour 1 km² à 0,50 m) — on peut
     donc demander la résolution que l'on veut, et diviser d'autant le volume ;
   * le serveur sous-échantillonne par **moyenne** (vérifié : écart nul au
@@ -16,6 +16,22 @@ s'appuie :
   * `HEAD` est refusé (HTTP 400) : ne jamais sonder autrement que par GET ;
   * `RESULTTYPE=hits` répond en 850 octets et donne le compte exact : c'est ce
     qui permet d'annoncer le volume **avant** de télécharger.
+
+Ce que le 2026-09-09 a changé, et qui a mis la découverte hors service :
+
+  * l'IGN a **retiré ses quatre couches de dalles** lors de la migration du
+    portail vers `cartes.gouv.fr`, et les a fusionnées en une seule,
+    `IGNF_LIDAR-HD_METADONNEE:metadata`. L'ancien nom fait maintenant répondre
+    « Unknown namespace [IGNF_MNS-LIDAR-HD] » ;
+  * les URL des quatre produits y sont des **attributs** (`url_mnt`, `url_mns`,
+    `url_mnh`, `url_npl`) : la découverte est donc la même requête pour tous, et
+    seule change la propriété d'où l'on tire l'URL ;
+  * la nouvelle couche n'a **plus de propriété `name`**. L'identité vient du
+    coin nord-ouest (`coordonnees_nw`), préfixé du produit — sans quoi les
+    trois produits d'une même dalle partageraient une clé de cache ;
+  * en compensation, elle porte une provenance bien plus riche :
+    `code_mission`, `date_edition`, `systeme_altimetrique`, dates d'acquisition,
+    `procede_classement`, `nombre_points`.
 """
 
 import json
@@ -24,12 +40,36 @@ from dataclasses import dataclass
 
 WFS_URL = "https://data.geopf.fr/wfs/ows"
 
-# Codes de couches vérifiés en appel réel le 2026-09-01.
+# Une SEULE couche porte desormais l'index des dalles, et les URL des quatre
+# produits y sont des ATTRIBUTS. Constate par appel reel le 2026-09-09, apres
+# que la decouverte a cesse de rendre quoi que ce soit.
+#
+# Avant, l'IGN publiait quatre couches distinctes : `IGNF_MNT-LIDAR-HD:dalle`,
+# `IGNF_MNS-LIDAR-HD:dalle`, `IGNF_MNH-LIDAR-HD:dalle` et
+# `IGNF_NUAGES-DE-POINTS-LIDAR-HD:dalle`. Elles ont ete RETIREES lors de la
+# migration du portail vers cartes.gouv.fr : sur les 800 couches que le service
+# annonce aujourd'hui, aucune ne porte plus MNT, MNS ni MNH, et le WFS repond
+# « Unknown namespace [IGNF_MNS-LIDAR-HD] ».
+#
+# La lecon du 2026-09-01 vaut donc dans les deux sens : un code de couche ne se
+# devine pas, il se constate — ET il peut changer sous nos pieds. La source
+# d'autorite est GetCapabilities, pas notre memoire.
+TYPENAME_DALLES = "IGNF_LIDAR-HD_METADONNEE:metadata"
+
+# Propriete portant l'URL de telechargement, par produit. Verifie sur une
+# entite reelle : l'URL est une requete WMS GetMap sur
+# `IGNF_LIDAR-HD_<produit>_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93`, en
+# `FORMAT=image/geotiff` avec `WIDTH=HEIGHT=2000` pour 1 km2 a 0,50 m — donc
+# exactement la forme que `url_a_resolution()` sait reecrire. Rejoue telle
+# quelle : HTTP 200, 16 000 513 octets, signature GeoTIFF valide.
 PRODUITS = {
-    "MNT": "IGNF_MNT-LIDAR-HD:dalle",
-    "MNS": "IGNF_MNS-LIDAR-HD:dalle",
-    "MNH": "IGNF_MNH-LIDAR-HD:dalle",
+    "MNT": "url_mnt",
+    "MNS": "url_mns",
+    "MNH": "url_mnh",
 }
+
+# Le nuage de points brut, qui ne s'assemble pas comme un raster.
+PROPRIETE_NUAGE = "url_npl"
 
 RESOLUTION_NATIVE = 0.5  # m, résolution du LiDAR HD livré
 EPSG_TRAVAIL = 2154
@@ -83,21 +123,29 @@ class TransportRequests:
             raise ErreurGeoplateforme("Appel réseau impossible : %s" % erreur)
 
 
-def code_couche(produit):
-    """Accepte un raccourci (« MNS ») ou un code de couche complet.
+def propriete_url(produit):
+    """Nom de la propriété portant l'URL, pour un raccourci ou une propriété.
 
-    Le nuage de points brut n'est pas dans `PRODUITS` — il ne se sert ni ne
-    s'assemble comme un raster — mais sa **découverte** passe par le même WFS.
-    Laisser entrer un code complet évite d'avoir à dupliquer cette découverte.
+    Accepte « MNS », « url_mns » ou `PROPRIETE_NUAGE` : la découverte est
+    désormais la MÊME requête pour les quatre produits — une seule couche — et
+    seule change la propriété d'où l'on tire l'URL. Laisser entrer un nom de
+    propriété tel quel évite d'avoir à dupliquer cette découverte pour le nuage
+    de points, qui n'est pas dans `PRODUITS`.
     """
-    if ":" in str(produit):
-        return str(produit)
+    texte = str(produit)
+    if texte.startswith("url_"):
+        return texte
     if produit not in PRODUITS:
         raise ErreurGeoplateforme(
-            "Produit inconnu : %r (attendu : %s, ou un code de couche complet)"
+            "Produit inconnu : %r (attendu : %s, ou un nom de propriété url_*)"
             % (produit, ", ".join(PRODUITS))
         )
     return PRODUITS[produit]
+
+
+# Conserve sous son ancien nom : des appelants exterieurs peuvent s'en servir,
+# et le renommer sans prevenir serait une rupture gratuite.
+code_couche = propriete_url
 
 
 def _parametres_communs(emprise, produit):
@@ -105,7 +153,9 @@ def _parametres_communs(emprise, produit):
         "SERVICE": "WFS",
         "VERSION": "2.0.0",
         "REQUEST": "GetFeature",
-        "TYPENAME": code_couche(produit),
+        # Une seule couche pour les quatre produits : le TYPENAME ne depend
+        # plus du produit demande, seule la propriete d'URL en depend.
+        "TYPENAME": TYPENAME_DALLES,
         "SRSNAME": "EPSG:%d" % EPSG_TRAVAIL,
         "BBOX": "%f,%f,%f,%f,urn:ogc:def:crs:EPSG::%d"
         % (emprise[0], emprise[1], emprise[2], emprise[3], EPSG_TRAVAIL),
@@ -158,13 +208,30 @@ def lister_dalles(emprise, produit, transport=None, maximum=10000):
     except ValueError as erreur:
         raise ErreurGeoplateforme("WFS : JSON invalide (%s)." % erreur)
 
+    cle_url = propriete_url(produit)
+    # Le nom de dalle est la CLE DU CACHE : `telecharger_dalles` en derive le
+    # nom de fichier et l'entree de manifeste. Il doit donc porter le produit,
+    # car une seule couche sert desormais les quatre : sans ce prefixe, MNT,
+    # MNS et MNH d'une meme dalle porteraient le nom « 1039-6820 » et, a
+    # resolution egale, le second telechargement relirait le fichier du premier.
+    # Un MNT rendu a la place d'un MNS ne se voit pas — c'est un raster
+    # d'altitudes plausibles — et la ZIV serait fausse sans un mot.
+    prefixe = cle_url[4:] if cle_url.startswith("url_") else str(cle_url)
     dalles = []
     for entite in donnees.get("features", []):
         proprietes = entite.get("properties") or {}
-        url = proprietes.get("url")
-        nom = proprietes.get("name") or proprietes.get("nom")
-        if not url or not nom:
+        url = proprietes.get(cle_url)
+        # La nouvelle couche n'a PLUS de propriete `name`, et l'ancienne version
+        # ecartait toute dalle qui en manquait : meme avec le bon TYPENAME,
+        # toutes les dalles auraient ete sautees en silence. L'identite vient
+        # desormais du coin nord-ouest — « 1039-6820 » — qui est justement ce
+        # qui distingue une dalle d'une autre. L'`id` d'entite sert de repli.
+        brut = (proprietes.get("coordonnees_nw")
+                or proprietes.get("name") or proprietes.get("nom")
+                or entite.get("id"))
+        if not url or not brut:
             continue
+        nom = "%s_%s" % (prefixe, str(brut).replace(".", "_"))
         emprise_dalle = _emprise_geometrie(entite.get("geometry"))
         if emprise_dalle is None:
             emprise_dalle = _emprise_depuis_url(url)
@@ -172,7 +239,8 @@ def lister_dalles(emprise, produit, transport=None, maximum=10000):
             continue
         dalles.append(
             Dalle(nom=nom, url=url, emprise=emprise_dalle,
-                  horodatage=str(proprietes.get("timestamp") or ""))
+                  horodatage=str(proprietes.get("date_edition")
+                                 or proprietes.get("timestamp") or ""))
         )
     dalles.sort(key=lambda d: d.nom)
     return dalles

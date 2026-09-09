@@ -238,11 +238,17 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
     ]
 
     # Mapping to WFS codes (Updated based on user input and IGN Géoplateforme)
+    # Ce ne sont plus des noms de couches WFS mais les PROPRIETES qui portent
+    # l'URL de telechargement. L'IGN a retire ses quatre couches de dalles lors
+    # de la migration vers cartes.gouv.fr et les a fusionnees en une seule,
+    # `IGNF_LIDAR-HD_METADONNEE:metadata`, qui expose les quatre URL en
+    # attributs. Constate le 2026-09-09 : l'ancien nom fait repondre
+    # « Unknown namespace [IGNF_MNS-LIDAR-HD] ».
     DATA_TYPE_CODES = {
-        0: "IGNF_MNT-LIDAR-HD:dalle",  # MNT
-        1: "IGNF_MNS-LIDAR-HD:dalle",  # MNS
-        2: "IGNF_MNH-LIDAR-HD:dalle",  # MNH
-        3: "IGNF_NUAGES-DE-POINTS-LIDAR-HD:dalle",  # LIDAR (Confirmed correct name)
+        0: "url_mnt",  # MNT
+        1: "url_mns",  # MNS
+        2: "url_mnh",  # MNH
+        3: "url_npl",  # LIDAR, nuage de points brut
     }
 
     def __init__(self):

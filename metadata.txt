@@ -3,7 +3,7 @@ name=Zones d'influence visuelle (ZIV)
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 supportsQt6=yes
-version=1.5.3
+version=1.5.4
 author=G. DELSIGNE
 email=gregoire.delsigne@outlook.fr
 
@@ -28,7 +28,13 @@ icon=icon.png
 experimental=False
 deprecated=False
 
-changelog= 1.5.3 - Le greffon redevient installable : metadata.txt etait illisible par QGIS ET par le depot officiel.
+changelog= 1.5.4 - Le greffon redevient fonctionnel : l'IGN a retire les couches de dalles que la decouverte interrogeait.
+    DECOUVERTE HORS SERVICE, corrigee. Lors de la migration du portail de geoservices.ign.fr vers cartes.gouv.fr, la Geoplateforme a RETIRE ses quatre couches de dalles LiDAR HD - IGNF_MNT-LIDAR-HD:dalle, IGNF_MNS-LIDAR-HD:dalle, IGNF_MNH-LIDAR-HD:dalle et IGNF_NUAGES-DE-POINTS-LIDAR-HD:dalle - et les a fusionnees en une seule, IGNF_LIDAR-HD_METADONNEE:metadata, qui expose les quatre URL de telechargement en ATTRIBUTS (url_mnt, url_mns, url_mnh, url_npl). Le WFS repond desormais « Unknown namespace [IGNF_MNS-LIDAR-HD] » sur les anciens noms : sur les 800 couches que le service annonce, aucune ne porte plus MNT, MNS ni MNH. La decouverte rendait donc zero dalle sur toute emprise, et la chaine s'arretait sur « Aucune dalle exploitable apres selection ».
+    Trois changements, tous constates par appel reel et non devines. Un seul TYPENAME sert les quatre produits, et seule change la propriete d'ou l'on tire l'URL. La nouvelle couche n'ayant PLUS de propriete « name », l'identite de dalle vient du coin nord-ouest (coordonnees_nw, par exemple 1039-6820) - sans quoi toute dalle aurait ete ecartee en silence, l'ancien code exigeant ce champ. Ce nom est PREFIXE du produit (mnt_1039-6820), car une seule couche servant les quatre, les trois produits d'une meme dalle auraient partage une cle de cache : a resolution egale, un MNS aurait relu le fichier du MNT, ce qui ne se voit pas - un raster d'altitudes plausibles - et rendait la ZIV fausse sans un mot. L'horodatage vient de date_edition.
+    Verifie sur le service reel : 25 dalles trouvees pour chacun des quatre produits sur une emprise de 3 km en Alsace, 100 noms sans une seule collision de cle, URL rejouee telle quelle en HTTP 200 pour 16 000 513 octets de GeoTIFF valide, et reecriture a 2 m rendant 500 x 500 pixels. Les sept bancs de tests rendent leurs 90 controles verts.
+    En compensation, la nouvelle couche porte une provenance bien plus riche que l'ancienne : code_mission, date_edition, systeme_altimetrique, dates de debut et de fin d'acquisition, procede_classement, nombre de points. De quoi documenter un livrable d'etude, ce que l'ancienne couche ne permettait pas.
+    VERSION : la constante VERSION de __init__.py etait restee a 1.5.1 alors que metadata.txt annoncait 1.5.3. Les deux valent maintenant 1.5.4. Un numero de version doit designer un contenu et un seul, y compris a l'interieur du paquet.
+    1.5.3 - Le greffon redevient installable : metadata.txt etait illisible par QGIS ET par le depot officiel.
     METADATA.TXT REFUSE, corrige. metadata.txt est lu par configparser.ConfigParser() nu, donc avec BasicInterpolation : « %% » y est un caractere d'echappement, et un « %% » suivi d'un espace fait lever InterpolationSyntaxError - non pas a la lecture du fichier, mais a l'ACCES au champ. D'ou un fichier qui parait valide et un greffon refuse. Il faut ecrire « %%%% », qui se relit « %% ». Dix occurrences echappees ici, quatre dans Big G.
     Le defaut existait depuis la 1.5.0 (« binaire identique a 100,000 %% » dans son propre changelog) et bloquait DEUX portes a la fois, avec le meme message :
     - QGIS Desktop, Installer depuis un ZIP : « There were errors reading plugin package. Errors parsing ZIV_prime/metadata.txt. '%%' must be followed by '%%' or '(' ». L'installation par ZIP etait donc impossible depuis la 1.5.0. Les fichiers ont ete recopies a la main dans le profil, ce qui a produit une installation hybride ou masquage.py et donnees_ign.py etaient absents et ou le masquage foret/bati etait silencieusement saute - le symptome d'origine.
