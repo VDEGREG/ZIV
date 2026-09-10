@@ -2232,11 +2232,20 @@ Créer la ZIV :
         """
         bbox = aoi_geometry.boundingBox()
         emprise = (bbox.xMinimum(), bbox.yMinimum(), bbox.xMaximum(), bbox.yMaximum())
+        # Remis a zero a chaque decouverte : un motif garde d'une execution
+        # precedente etiquetterait a tort un vrai trou de couverture en panne.
+        self._echec_wfs = ""
         try:
             return import_dalles.dalles_geoplateforme(
                 emprise, data_type_code, journal=self.logger
             )
         except Exception as e:
+            # Le motif est RETENU, pas seulement journalise : sans lui, une
+            # panne du service est annoncee a l'utilisateur comme une « zone
+            # non couverte ». C'est ce message trompeur qui a masque le retrait
+            # des couches de dalles par l'IGN le 2026-09-09 : le greffon publie
+            # accusait la couverture LiDAR alors que le WFS repondait HTTP 400.
+            self._echec_wfs = str(e)
             self.logger.error("Interrogation du WFS impossible : %s" % e)
             return []
 
@@ -2582,18 +2591,36 @@ Créer la ZIV :
                 else:
                     intersecting_tiles = intersecting_tiles_preview
             if no_tiles:
-                self.logger.warning(
-                    "Aucune dalle LiDAR HD sur l'AOI - zone non couverte "
-                    "par le LiDAR HD IGN (couverture ~80 % de la métropole)."
-                )
+                echec = getattr(self, "_echec_wfs", "")
+                if echec:
+                    detail_journal = (
+                        "Le service IGN n'a pas repondu la liste des dalles : %s. "
+                        "Ce n'est PAS un defaut de couverture : verifier le "
+                        "reseau, puis que les codes de couche sont toujours ceux "
+                        "que le WFS annonce (scripts/veiller_couches_ign.py)."
+                        % echec
+                    )
+                    detail_barre = (
+                        "Le service IGN n'a pas repondu - impossible de savoir "
+                        "si la zone est couverte."
+                    )
+                else:
+                    detail_journal = (
+                        "Aucune dalle LiDAR HD sur l'AOI - zone non couverte "
+                        "par le LiDAR HD IGN (couverture ~80 % de la métropole)."
+                    )
+                    detail_barre = (
+                        "Aucune dalle LiDAR HD ne couvre cette zone - "
+                        "impossible de calculer la ZIV ici."
+                    )
+                self.logger.warning(detail_journal)
                 with contextlib.suppress(Exception):
                     from qgis.utils import iface as _iface
 
                     if _iface is not None:
                         _iface.messageBar().pushMessage(
                             PLUGIN_DISPLAY_NAME,
-                            "Aucune dalle LiDAR HD ne couvre cette zone - "
-                            "impossible de calculer la ZIV ici.",
+                            detail_barre,
                             level=Qgis.MessageLevel.Warning,
                             duration=10,
                         )
