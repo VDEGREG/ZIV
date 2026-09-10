@@ -3,7 +3,7 @@ name=Zones d'influence visuelle (ZIV)
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 supportsQt6=yes
-version=1.5.5
+version=1.5.6
 author=G. DELSIGNE
 email=gregoire.delsigne@outlook.fr
 
@@ -28,7 +28,8 @@ icon=icon.png
 experimental=False
 deprecated=False
 
-changelog= 1.5.5 - Une panne du service IGN n'est plus annoncee comme une zone non couverte, et le depot veille sur les codes de couche.
+changelog= 1.5.6 - Les nouvelles tentatives de telechargement sont espacees (2 s puis 5 s) et cedent a l'annulation : devant un service momentanement sature, trois tentatives immediates n'en faisaient qu'une.
+ 1.5.5 - Une panne du service IGN n'est plus annoncee comme une zone non couverte, et le depot veille sur les codes de couche.
     MESSAGE TROMPEUR, corrige. Quand le WFS refusait la requete, la decouverte rendait une liste vide et le greffon annoncait « Aucune dalle LiDAR HD ne couvre cette zone » : il accusait la couverture LiDAR d'un defaut qui etait celui du service. C'est ce message qui a rendu le retrait des couches par l'IGN invisible - le motif reel (HTTP 400) n'allait qu'au journal. Le motif d'echec est desormais RETENU, et le message distingue les deux cas : « Le service IGN n'a pas repondu - impossible de savoir si la zone est couverte » quand la requete a echoue, le message de couverture quand le service a bien repondu zero dalle. Le motif est remis a zero a chaque decouverte, pour qu'un echec passe n'etiquette pas a tort un vrai trou de couverture.
     Verifie sur le service reel, les deux branches et le cas discriminant : zone couverte et service sain, 25 dalles et aucun motif ; hote injoignable, motif retenu et journalise ; plein Atlantique, zero dalle et AUCUN motif - le message de couverture est donc conserve la ou il est juste ; et le motif ne survit pas d'une decouverte a l'autre sur une meme instance.
     VEILLE SUR LES CODES DE COUCHE. Le depot porte desormais scripts/veiller_couches_ign.py, qui lit le TYPENAME et les proprietes d'URL DANS le code du greffon - pas dans une liste ecrite a la main, qui se perimerait comme le code qu'elle surveille - et les confronte a ce que le service annonce : couche presente dans GetCapabilities, proprietes au schema DescribeFeatureType, et une entite reelle qui les porte non vides. De quoi DATER une rupture au lieu de la decouvrir sur un livrable publie. Garde-fou eprouve en cassant chacune de ses deux conditions : ancien nom de couche detecte, propriete d'URL inexistante detectee.

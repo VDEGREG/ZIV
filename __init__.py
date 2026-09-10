@@ -21,7 +21,7 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMessageBox, QToolButton
 
 # Plugin version
-VERSION = "1.5.5"
+VERSION = "1.5.6"
 # Nom affiche a l'utilisateur (fenetres, menu, journal).
 PLUGIN_NAME = "Zones d'influence visuelle (ZIV)"
 # Nom de paquet : dossier installe, espace QgsSettings, dossier temporaire

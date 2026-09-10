@@ -25,6 +25,12 @@ MANIFESTE = "_dalles.json"
 _SIGNATURES = (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")
 
 
+# Attente avant la Nieme nouvelle tentative, en secondes. Volontairement
+# courte : elle suffit a laisser passer un 504 passager sans rendre une
+# annulation lente a prendre effet.
+ATTENTES = {1: 2.0, 2: 5.0}
+
+
 class JournalMuet:
     def info(self, message):
         pass
@@ -125,7 +131,8 @@ def telecharger_dalles(dalles, dossier, resolution, transport=None, journal=None
             reprises += 1
             continue
 
-        octets = _telecharger_une(url, fichier, transport, tentatives)
+        octets = _telecharger_une(url, fichier, transport, tentatives,
+                                  attendre=_attendeur(est_annule))
         corrigee = corriger_georeference(fichier)
         manifeste[cle] = {
             "fichier": fichier.name,
@@ -149,7 +156,29 @@ def telecharger_dalles(dalles, dossier, resolution, transport=None, journal=None
     return chemins
 
 
-def _telecharger_une(url, fichier, transport, tentatives):
+def _attendeur(est_annule):
+    """Rend une fonction d'attente qui reste sensible à l'annulation.
+
+    On patiente par tranches d'une demi-seconde plutôt qu'en un seul `sleep` :
+    un utilisateur qui annule pendant une attente de cinq secondes ne doit pas
+    attendre la fin de cette attente.
+    """
+    import time
+
+    def attendre(secondes):
+        reste = float(secondes)
+        while reste > 0.0:
+            if est_annule is not None and est_annule():
+                return False
+            tranche = min(0.5, reste)
+            time.sleep(tranche)
+            reste -= tranche
+        return True
+
+    return attendre
+
+
+def _telecharger_une(url, fichier, transport, tentatives, attendre=None):
     """Télécharge une dalle dans un fichier temporaire avant de la publier.
 
     Écrire directement sous le nom final laisserait, en cas de coupure, un
@@ -183,6 +212,9 @@ def _telecharger_une(url, fichier, transport, tentatives):
                 except OSError:
                     pass
             if essai == tentatives:
+                break
+            if attendre is not None and not attendre(ATTENTES.get(essai, 5.0)):
+                # Annulation pendant l'attente : inutile de reessayer.
                 break
     raise ErreurGeoplateforme(
         "Échec du téléchargement de %s après %d tentative(s) : %s"
