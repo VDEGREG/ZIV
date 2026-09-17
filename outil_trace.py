@@ -30,6 +30,7 @@ Echap pour tout effacer. Y compris son piege — le double-clic ajoute un sommet
 en doublon, qu'il faut retirer avant de construire la geometrie.
 """
 
+import contextlib
 from qgis.PyQt.QtCore import QCoreApplication, Qt
 from qgis.PyQt.QtGui import QColor
 from qgis.core import (QgsFeature, QgsGeometry, QgsProject, QgsVectorLayer,
@@ -68,11 +69,9 @@ class OutilTrace(QgsMapTool):
         self._bande = QgsRubberBand(self.canevas, genre)
         self._bande.setColor(QColor(255, 0, 0, 90))
         self._bande.setWidth(2)
-        try:
+        # Un curseur est un confort : son absence ne justifie rien.
+        with contextlib.suppress(Exception):
             self.setCursor(Qt.CursorShape.CrossCursor)
-        except Exception:
-            # Un curseur est un confort : son absence ne justifie rien.
-            pass
 
     # ---- la couche d'accueil ------------------------------------------
     def couche(self):
@@ -88,11 +87,9 @@ class OutilTrace(QgsMapTool):
             "%s?crs=%s&field=id:integer"
             % ("Point" if self.ponctuel else "Polygon", scr),
             _traduire(nom), "memory")
-        try:
+        with contextlib.suppress(Exception):
             symbole = couche.renderer().symbol()
             symbole.setColor(QColor(255, 0, 0, 60))
-        except Exception:
-            pass
         projet.addMapLayer(couche)
         return couche
 
@@ -174,10 +171,8 @@ class OutilTrace(QgsMapTool):
         couche = self.couche()
         entite = QgsFeature(couche.fields())
         entite.setGeometry(geometrie)
-        try:
+        with contextlib.suppress(Exception):
             entite.setAttribute("id", couche.featureCount() + 1)
-        except Exception:
-            pass
         couche.dataProvider().addFeatures([entite])
         couche.updateExtents()
         couche.triggerRepaint()
@@ -198,17 +193,13 @@ class OutilTrace(QgsMapTool):
         self._bande.reset(genre)
 
     def _avertir(self, message):
-        try:
+        with contextlib.suppress(Exception):
             self.iface.messageBar().pushWarning("ZIV", message)
-        except Exception:
-            pass
 
     def deactivate(self):
         # Sans cet effacement, la bande elastique reste peinte sur la carte
         # apres qu'on a change d'outil : c'est le defaut « bandeau orphelin »
         # deja rencontre ailleurs dans ce depot.
         self._effacer()
-        try:
+        with contextlib.suppress(Exception):
             super().deactivate()
-        except Exception:
-            pass

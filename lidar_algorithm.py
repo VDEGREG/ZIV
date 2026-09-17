@@ -1069,10 +1069,8 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         renderer.setClassificationMin(-1e6)
         renderer.setClassificationMax(1e6)
         renderer.setOpacity(1.0)
-        try:
+        with contextlib.suppress(AttributeError):
             renderer.setNodataColor(night)
-        except AttributeError:
-            pass
         layer.setRenderer(renderer)
         layer.triggerRepaint()
         self.logger.info("ZIV symbology: spotlight night (defaut)")
@@ -1114,10 +1112,8 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         renderer.setClassificationMin(-1e6)
         renderer.setClassificationMax(16.0)
         renderer.setOpacity(1.0)
-        try:
+        with contextlib.suppress(AttributeError):
             renderer.setNodataColor(invisible)
-        except AttributeError:
-            pass
         layer.setRenderer(renderer)
         layer.triggerRepaint()
         self.logger.info("ZIV symbology: warm gradient (style v1.3.x)")
@@ -1143,10 +1139,8 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         renderer.setClassificationMin(-1e6)
         renderer.setClassificationMax(1e6)
         renderer.setOpacity(1.0)
-        try:
+        with contextlib.suppress(AttributeError):
             renderer.setNodataColor(invisible)
-        except AttributeError:
-            pass
         layer.setRenderer(renderer)
         layer.triggerRepaint()
         self.logger.info("ZIV symbology: translucent red (uniform)")
@@ -1182,13 +1176,11 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
 
         contexte = getattr(self, "_contexte_processing", None)
         if contexte is not None:
-            try:
+            with contextlib.suppress(Exception):
                 trouvee = QgsProcessingUtils.mapLayerFromString(
                     str(candidat), contexte)
                 if isinstance(trouvee, QgsVectorLayer) and trouvee.isValid():
                     return trouvee
-            except Exception:
-                pass
 
         # Dernier recours sans etat : un identifiant de couche se resout sur
         # le projet courant. Sans cela, la resolution dependrait de ce que
@@ -2236,7 +2228,8 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         kilometres. Signale le 2026-09-11 : projet en UTM 18N, zone en 17N,
         ZIV « dans l'ocean » apres correction manuelle du SCR.
         """
-        try:
+        # Un avertissement de confort ne fait echouer aucun calcul.
+        with contextlib.suppress(Exception):
             travail = int(getattr(self, "_epsg_travail", 0) or 0)
             if not travail:
                 return
@@ -2252,9 +2245,6 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                 "EPSG:%d : QGIS les reprojette a l'affichage, il ne faut PAS "
                 "leur imposer le SCR du projet — elles se retrouveraient a "
                 "des centaines de kilometres." % (travail, code, travail))
-        except Exception:
-            # Un avertissement de confort ne fait echouer aucun calcul.
-            pass
 
     def _journaliser_provenance(self, resolution):
         """Écrit au journal SUR QUOI le résultat repose, en clair.

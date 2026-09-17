@@ -26,6 +26,7 @@ prévient et on rend la ZIV telle quelle. Une ZIV non masquée reste exploitable
 pas de ZIV du tout, non.
 """
 
+import contextlib
 import os
 import shutil
 from pathlib import Path
@@ -109,11 +110,9 @@ def _preparer_destination(chemin_ziv, chemin_demande, journal):
     destination = Path(chemin_demande) if chemin_demande else (
         source.parent / ("%s_masque.tif" % source.stem)
     )
-    try:
+    with contextlib.suppress(OSError):
         if destination.exists() and os.path.samefile(str(source), str(destination)):
             return destination, True
-    except OSError:
-        pass
     if str(destination) == str(source):
         return destination, True
 

@@ -3,7 +3,7 @@ name=Zones d'influence visuelle (ZIV)
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 supportsQt6=yes
-version=1.6.0
+version=1.6.1
 author=G. DELSIGNE
 email=gregoire.delsigne@outlook.fr
 
@@ -31,6 +31,7 @@ icon=icon.png
 experimental=False
 deprecated=False
 
-changelog= 1.6.0 - One plugin again, and it now covers the United States.
+changelog= 1.6.1 - One plugin again, and it now covers the United States.
     The two-country chain had grown as a separate package so the France chain could keep running untouched while the American side was built. It comes back under this plugin's own identities, so you receive an update rather than a stranger, and find your settings where you left them. Every fix shipped up to 1.5.6 is carried over, checked one by one: the IGN tile-layer withdrawal, a service outage no longer reported as a gap in coverage, spaced-out download retries.
     What is new: the contiguous United States (USGS 3DEP terrain, LANDFIRE vegetation height, USA Structures buildings, TIGER/Line roads), the country deduced from your area of interest; contour lines drawn from bare earth rather than from the surface; output layers delivered in the project's own coordinate system; an area or a single viewpoint drawn straight on the map; and isolated speckle cleared from the viewshed without ever removing visibility.
+    Clean bill of health from the repository security scan: twenty-seven exception handlers that did nothing but pass over the error are now written as contextlib.suppress(...), which says the same thing out loud. Each keeps the exact error type it caught - an OSError stays an OSError, nothing was widened. No behaviour changes.

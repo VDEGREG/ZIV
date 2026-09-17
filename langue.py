@@ -11,6 +11,7 @@ par QTranslator. « Passer en anglais » consiste donc a RETIRER le traducteur,
 pas a en installer un autre.
 """
 
+import contextlib
 from pathlib import Path
 
 from qgis.PyQt.QtCore import QCoreApplication, QLocale, QTranslator
@@ -96,7 +97,8 @@ def rafraichir_fournisseurs():
     Sans objet pour les libelles eux-memes — ils suivent `tr()` — mais l'arbre
     de la boite a outils, lui, garde le texte peint a son dernier remplissage.
     """
-    try:
+    # Le confort d'affichage ne justifie pas de faire echouer un clic.
+    with contextlib.suppress(Exception):
         from qgis.core import QgsApplication
 
         registre = QgsApplication.processingRegistry()
@@ -104,6 +106,3 @@ def rafraichir_fournisseurs():
             fournisseur = registre.providerById(identifiant)
             if fournisseur is not None:
                 fournisseur.refreshAlgorithms()
-    except Exception:
-        # Le confort d'affichage ne justifie pas de faire echouer un clic.
-        pass

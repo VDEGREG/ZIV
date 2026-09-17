@@ -13,6 +13,7 @@ Deux pièges mesurés le 2026-09-01, dont ce module se protège :
     planter QGIS. On le réécrit proprement dès l'arrivée.
 """
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -53,12 +54,10 @@ def _lire_manifeste(dossier):
 
 
 def _ecrire_manifeste(dossier, manifeste):
-    try:
+    with contextlib.suppress(OSError):
         (dossier / MANIFESTE).write_text(
             json.dumps(manifeste, indent=1, ensure_ascii=False), encoding="utf-8"
         )
-    except OSError:
-        pass
 
 
 def corriger_georeference(chemin):
@@ -239,10 +238,8 @@ def _telecharger_une(url, fichier, transport, tentatives, attendre=None):
         except Exception as erreur:
             dernier = erreur
             if temporaire.exists():
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(temporaire)
-                except OSError:
-                    pass
             if essai == tentatives:
                 break
             if attendre is not None and not attendre(ATTENTES.get(essai, 5.0)):

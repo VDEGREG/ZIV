@@ -30,6 +30,7 @@ chacun impose ici :
      1 m. On borne donc au natif, que l'index de disponibilité nous donne.
 """
 
+import contextlib
 import math
 import re
 import urllib.parse
@@ -168,7 +169,7 @@ def couverture_lidar_1m(bbox_wgs84, transport=None, journal=None):
         return None, []
     noms = []
     if nombre:
-        try:
+        with contextlib.suppress(Exception):
             donnees = _json(requete, dict(commun, outFields="project,pub_date",
                                           returnGeometry="false",
                                           resultRecordCount="5"), transport)
@@ -177,8 +178,6 @@ def couverture_lidar_1m(bbox_wgs84, transport=None, journal=None):
                 nom = attributs.get("project")
                 if nom:
                     noms.append("%s (%s)" % (nom, attributs.get("pub_date") or "?"))
-        except Exception:
-            pass  # le compte suffit à décider ; les noms ne sont qu'un confort
     return nombre, noms
 
 

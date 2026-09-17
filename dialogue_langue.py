@@ -24,6 +24,7 @@ construits : les libelles ont ete poses a l'ouverture. On rouvre donc le
 formulaire, en lui repassant les valeurs deja saisies.
 """
 
+import contextlib
 from qgis.PyQt.QtCore import QCoreApplication, QTimer
 from qgis.PyQt.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
@@ -38,11 +39,9 @@ except Exception:
     _PANNEAU = None
 for _module, _nom in (("processing.gui.AlgorithmDialog", "AlgorithmDialog"),
                       ("processing.gui.algorithm_widget", "AlgorithmWidget")):
-    try:
+    with contextlib.suppress(Exception):
         _BASE = getattr(__import__(_module, fromlist=[_nom]), _nom)
         break
-    except Exception:
-        continue
 
 
 def disponible():
@@ -174,15 +173,13 @@ if disponible():
             self._placer_sous_lentree(self.barre_trace)
 
         def _remonter_en_tete(self):
-            try:
+            # Restee en bas, la barre reste cliquable : ce n'est qu'une
+            # question de place.
+            with contextlib.suppress(Exception):
                 disposition = self.barre.parentWidget().layout()
                 if disposition is not None:
                     disposition.removeWidget(self.barre)
                     disposition.insertWidget(0, self.barre)
-            except Exception:
-                # Restee en bas, la barre reste cliquable : ce n'est qu'une
-                # question de place.
-                pass
 
         def _placer_sous_lentree(self, widget):
             """Deplace `widget` juste apres le widget du parametre INPUT.
@@ -193,7 +190,9 @@ if disponible():
             Sonde du 2026-09-14 : le panneau expose `wrappers`, un dictionnaire
             nom de parametre -> wrapper, et `wrappedWidget()` rend le widget.
             """
-            try:
+            # Reste en bas du formulaire : deplace ou non, le bouton
+            # trace. Mieux vaut mal place que pas la.
+            with contextlib.suppress(Exception):
                 disposition = widget.parentWidget().layout()
                 if disposition is None:
                     return
@@ -202,10 +201,6 @@ if disponible():
                 rang = disposition.indexOf(cible) if cible is not None else -1
                 disposition.removeWidget(widget)
                 disposition.insertWidget(rang + 1 if rang >= 0 else 0, widget)
-            except Exception:
-                # Reste en bas du formulaire : deplace ou non, le bouton
-                # trace. Mieux vaut mal place que pas la.
-                pass
 
         # ---- le trace a la souris -------------------------------------
         def _tracer(self, ponctuel):
@@ -238,12 +233,10 @@ if disponible():
             def termine(couche):
                 self.desactiver_trace()
                 if fenetre is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         fenetre.showNormal()
                         fenetre.raise_()
                         fenetre.activateWindow()
-                    except Exception:
-                        pass
                 self._choisir_la_couche(couche)
 
             self.desactiver_trace()
@@ -253,14 +246,14 @@ if disponible():
                 iface, ponctuel=ponctuel, au_termine=termine)
             canevas.setMapTool(self._outil_trace)
             if fenetre is not None:
-                try:
+                with contextlib.suppress(Exception):
                     fenetre.showMinimized()
-                except Exception:
-                    pass
 
         def _choisir_la_couche(self, couche):
             """Pose la couche tracee dans le champ d'entree du formulaire."""
-            try:
+            # La couche est dans le projet : l'utilisateur la choisira
+            # d'un clic. Un confort manque, pas une fonction.
+            with contextlib.suppress(Exception):
                 from qgis.core import QgsProcessingContext
 
                 wrapper = (getattr(self, "wrappers", None) or {}).get("INPUT")
@@ -268,10 +261,6 @@ if disponible():
                     return
                 contexte = QgsProcessingContext()
                 wrapper.setParameterValue(couche, contexte)
-            except Exception:
-                # La couche est dans le projet : l'utilisateur la choisira
-                # d'un clic. Un confort manque, pas une fonction.
-                pass
 
         def desactiver_trace(self):
             """Rend le canevas a son outil d'avant. Toujours appelable.
@@ -286,7 +275,7 @@ if disponible():
             self._outil_trace = None
             precedent = getattr(self, "_outil_precedent", None)
             self._outil_precedent = None
-            try:
+            with contextlib.suppress(Exception):
                 from qgis.utils import iface
 
                 if iface is None:
@@ -299,8 +288,6 @@ if disponible():
                     canevas.setMapTool(precedent)
                 else:
                     canevas.unsetMapTool(outil)
-            except Exception:
-                pass
 
         def _demander_langue(self, code):
             if code == langue_module.retenue():
@@ -328,10 +315,8 @@ if disponible():
             # canevas avant de disparaitre.
             panneau = getattr(self, "_panneau_ziv", None)
             if panneau is not None:
-                try:
+                with contextlib.suppress(Exception):
                     panneau.desactiver_trace()
-                except Exception:
-                    pass
             try:
                 super().closeEvent(event)
             except Exception:
@@ -346,15 +331,13 @@ def _valeurs_saisies(dialogue):
     rend alors ce qu'on peut, quitte a rouvrir un formulaire vide.
     """
     for methode in ("createProcessingParameters", "getParameterValues"):
-        try:
+        with contextlib.suppress(Exception):
             fonction = getattr(dialogue, methode, None)
             if fonction is None:
                 continue
             valeurs = fonction()
             if isinstance(valeurs, dict):
                 return valeurs
-        except Exception:
-            continue
     return {}
 
 
@@ -365,12 +348,10 @@ def _rouvrir(dialogue, valeurs):
     modale du dialogue qu'on ferme ne fonctionne pas.
     """
     identifiant = "genziv:generate"
-    try:
+    with contextlib.suppress(Exception):
         algorithme = dialogue.algorithm()
         if algorithme is not None:
             identifiant = algorithme.id()
-    except Exception:
-        pass
 
     def ouvrir():
         try:
@@ -378,15 +359,11 @@ def _rouvrir(dialogue, valeurs):
 
             processing.execAlgorithmDialog(identifiant, valeurs or {})
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 import processing
 
                 processing.execAlgorithmDialog(identifiant, {})
-            except Exception:
-                pass
 
-    try:
+    with contextlib.suppress(Exception):
         dialogue.close()
-    except Exception:
-        pass
     QTimer.singleShot(0, ouvrir)
