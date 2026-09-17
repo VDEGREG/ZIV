@@ -68,7 +68,7 @@ class PreferencesDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Zones d'influence visuelle (ZIV) — Préférences")
+        self.setWindowTitle("Zones d'influence visuelle (ZIV) — Preferences")
         self.setMinimumWidth(520)
 
         root = QVBoxLayout(self)

@@ -71,16 +71,26 @@ def _emprise_du_raster(chemin):
 
 
 def _compter_entites(chemin):
-    """Nombre d'entités d'un fichier vecteur, 0 s'il est illisible."""
+    """Nombre d'entités d'un fichier vecteur, 0 s'il est illisible.
+
+    Le `None` d'`ogr.Open` ne suffit plus : depuis GDAL 3.7,
+    `gdal.UseExceptions()` est un reglage GLOBAL du processus, et QGIS comme
+    n'importe quel autre greffon peut l'avoir arme. `ogr.Open` LEVE alors sur
+    un fichier illisible au lieu de rendre `None` — la promesse « 0 s'il est
+    illisible » tombait, et le masquage entier avec elle.
+    """
     from osgeo import ogr
 
-    source = ogr.Open(str(chemin))
-    if source is None:
+    try:
+        source = ogr.Open(str(chemin))
+        if source is None:
+            return 0
+        couche = source.GetLayer(0)
+        nombre = couche.GetFeatureCount() if couche is not None else 0
+        source = None
+        return int(nombre)
+    except Exception:
         return 0
-    couche = source.GetLayer(0)
-    nombre = couche.GetFeatureCount() if couche is not None else 0
-    source = None
-    return int(nombre)
 
 
 def _preparer_destination(chemin_ziv, chemin_demande, journal):

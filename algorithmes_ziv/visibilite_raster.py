@@ -70,30 +70,14 @@ class ViewshedRaster(QgsProcessingAlgorithm):
         return self.tr("Viewshed")
 
     def group(self):
-        return self.tr("Visibilité")
+        return self.tr('Visibility')
 
     def groupId(self):
         return "visibilite"
 
     def shortHelpString(self):
         return self.tr(
-            "<p>Produit une carte de visibilité depuis les points d'observation, "
-            "sur un modèle numérique de terrain.</p>"
-            "<ul>"
-            "<li><b>Binary viewshed</b> — 1 si la cellule est vue, 0 sinon.</li>"
-            "<li><b>Depth below horizon</b> — 0 là où la cible est vue, sinon le "
-            "nombre de <b>mètres</b> qu'il faudrait lui ajouter pour qu'elle "
-            "apparaisse.</li>"
-            "<li><b>Horizon</b> — les cellules de crête qui ferment le paysage.</li>"
-            "</ul>"
-            "<p>Avec plusieurs points, <i>Addition</i> compte combien de points "
-            "voient chaque cellule : c'est la carte d'exposition visuelle que la "
-            "chaîne ZIV stylise.</p>"
-            "<p>La couche de points doit porter les champs <code>observ_hgt</code> "
-            "et <code>radius</code>, que « Create viewpoints » produit. Les champs "
-            "facultatifs <code>targ_hgt</code>, <code>radius_in</code>, "
-            "<code>azim_1</code>, <code>azim_2</code>, <code>angle_up</code> et "
-            "<code>angle_down</code> sont pris en compte s'ils existent.</p>"
+            '<p>Produces a visibility map from the observer points, over a digital terrain model.</p><ul><li><b>Binary viewshed</b> — 1 where the cell is seen, 0 otherwise.</li><li><b>Depth below horizon</b> — 0 where the target is seen, otherwise how many <b>metres</b> would have to be added for it to appear.</li><li><b>Horizon</b> — the ridge cells that close the landscape.</li></ul><p>With several points, <i>Addition</i> counts how many of them see each cell: that is the visual exposure map the viewshed chain styles.</p><p>The point layer must carry the fields <code>observ_hgt</code> and <code>radius</code>, which Create viewpoints produces. The optional fields <code>targ_hgt</code>, <code>radius_in</code>, <code>azim_1</code>, <code>azim_2</code>, <code>angle_up</code> and <code>angle_down</code> are honoured when present.</p>'
         )
 
     def initAlgorithm(self, config=None):
@@ -210,7 +194,7 @@ class ViewshedRaster(QgsProcessingAlgorithm):
                 "Aucun point d'observation exploitable : tous sont hors du terrain."
             )
 
-        self._ecrire(chemin, cumul, mnt, couche_mnt)
+        self._ecrire(chemin, cumul, mnt, couche_mnt, feedback)
         vues = int(np.count_nonzero(np.nan_to_num(cumul, nan=0.0) > 0))
         feedback.pushInfo(
             "%d point(s) traite(s). %d cellule(s) a valeur non nulle sur %d "
@@ -259,7 +243,7 @@ class ViewshedRaster(QgsProcessingAlgorithm):
                 contribution[tangente < np.tan(np.radians(float(bas)))] = 0
 
     @staticmethod
-    def _ecrire(chemin, tableau, mnt, couche_mnt):
+    def _ecrire(chemin, tableau, mnt, couche_mnt, feedback=None):
         gdal.UseExceptions()
         pilote = gdal.GetDriverByName("GTiff")
         jeu = pilote.Create(str(chemin), mnt.nx, mnt.ny, 1, gdal.GDT_Float32,
@@ -271,6 +255,18 @@ class ViewshedRaster(QgsProcessingAlgorithm):
             reference = osr.SpatialReference()
             reference.ImportFromWkt(wkt)
             jeu.SetProjection(reference.ExportToWkt())
+        elif feedback is not None:
+            # Un raster sans projection ne se voit pas : il s'affiche, il se
+            # mesure, et c'est bien plus loin que la chaine casse. Mesure du
+            # 2026-09-14 : `gdal:merge` prend le systeme de sa PREMIERE entree
+            # et rend, sans un mot, une ZIV sans projection ; le masquage
+            # americain recoit alors un `-t_srs` vide et echoue sur
+            # « Invalid SRS for -t_srs », a trois etapes de la vraie cause.
+            feedback.pushWarning(
+                "Le terrain ne declare AUCUN systeme de coordonnees : la "
+                "visibilite sort donc sans projection, et tout ce qui la suit "
+                "— fusion, masquage, chargement — travaillera a l'aveugle. "
+                "Verifier le raster de terrain fourni.")
         bande = jeu.GetRasterBand(1)
         bande.SetNoDataValue(float("nan"))
         bande.WriteArray(tableau)

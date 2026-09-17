@@ -73,21 +73,14 @@ class ViewshedPoints(QgsProcessingAlgorithm):
         return self.tr("Create viewpoints")
 
     def group(self):
-        return self.tr("Visibilité")
+        return self.tr('Visibility')
 
     def groupId(self):
         return "visibilite"
 
     def shortHelpString(self):
         return self.tr(
-            "<p>Prépare une couche de points d'observation pour l'analyse de "
-            "visibilité : chaque point est reprojeté dans le système du modèle "
-            "numérique de terrain, <b>calé au centre de la cellule</b> qui le "
-            "contient, et reçoit ses paramètres d'analyse.</p>"
-            "<p>Pour chaque paramètre, un champ de la couche l'emporte sur la "
-            "valeur saisie : c'est ainsi qu'on traite d'un coup des mâts de "
-            "hauteurs différentes.</p>"
-            "<p>Les points hors emprise du terrain sont écartés et signalés.</p>"
+            '<p>Prepares an observer point layer for the visibility analysis: each point is reprojected into the coordinate system of the terrain model, <b>snapped to the centre of the cell</b> that contains it, and given its analysis parameters.</p><p>For every parameter, a field of the layer wins over the typed value: that is how masts of differing heights are handled in one go.</p><p>Points falling outside the terrain are dropped and reported.</p>'
         )
 
     def initAlgorithm(self, config=None):

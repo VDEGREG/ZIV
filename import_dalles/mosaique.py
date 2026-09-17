@@ -42,8 +42,14 @@ class JournalMuet:
 
 
 def construire_mosaique(chemins, sortie, agregation=MOYENNE, resolution_cible=None,
-                        emprise=None, journal=None):
-    """Assemble les dalles et écrit la mosaïque. Renvoie le chemin de sortie."""
+                        emprise=None, journal=None, epsg=EPSG_TRAVAIL):
+    """Assemble les dalles et écrit la mosaïque. Renvoie le chemin de sortie.
+
+    `epsg` est le SCR des dalles et de la sortie. Il ne sert qu'à deux endroits
+    — la découpe `projWin` et le SCR de l'agrégation par maximum — et son défaut
+    laisse la chaîne française rigoureusement inchangée. Le fournisseur
+    américain travaille en UTM, fuseau déduit de l'emprise.
+    """
     from osgeo import gdal
 
     gdal.UseExceptions()
@@ -64,7 +70,7 @@ def construire_mosaique(chemins, sortie, agregation=MOYENNE, resolution_cible=No
     if agregation == MAXIMUM:
         if resolution_cible is None:
             raise ErreurGeoplateforme("L'agrégation maximum exige une résolution cible.")
-        intermediaire = _agreger_maximum(vrt, resolution_cible, journal)
+        intermediaire = _agreger_maximum(vrt, resolution_cible, journal, epsg=epsg)
         vrt = None
         source = intermediaire
     elif agregation == MOYENNE:
@@ -77,7 +83,7 @@ def construire_mosaique(chemins, sortie, agregation=MOYENNE, resolution_cible=No
         # projWin s'exprime (xmin, ymax, xmax, ymin) et se cale sur les bords de
         # pixel : la grille de la mosaïque n'est pas déplacée par la découpe.
         options["projWin"] = [emprise[0], emprise[3], emprise[2], emprise[1]]
-        options["projWinSRS"] = "EPSG:%d" % EPSG_TRAVAIL
+        options["projWinSRS"] = "EPSG:%d" % epsg
 
     resultat = gdal.Translate(str(sortie), source, **options)
     if resultat is None:
@@ -90,7 +96,8 @@ def construire_mosaique(chemins, sortie, agregation=MOYENNE, resolution_cible=No
     return str(sortie)
 
 
-def _agreger_maximum(vrt, resolution_cible, journal, lignes_par_bloc=512):
+def _agreger_maximum(vrt, resolution_cible, journal, lignes_par_bloc=512,
+                     epsg=EPSG_TRAVAIL):
     """Réduit le VRT natif à la résolution cible en gardant le point le plus haut.
 
     Travaillé par bandes : une mosaïque de 10 x 10 km à 0,50 m fait 400 millions
@@ -122,7 +129,7 @@ def _agreger_maximum(vrt, resolution_cible, journal, lignes_par_bloc=512):
     memoire.SetGeoTransform((geotransform[0], effective, 0.0,
                              geotransform[3], 0.0, -effective))
     reference = osr.SpatialReference()
-    reference.ImportFromEPSG(EPSG_TRAVAIL)
+    reference.ImportFromEPSG(epsg)
     memoire.SetSpatialRef(reference)
     bande_sortie = memoire.GetRasterBand(1)
     bande_sortie.SetNoDataValue(SANS_DONNEE)
@@ -155,8 +162,13 @@ def _agreger_maximum(vrt, resolution_cible, journal, lignes_par_bloc=512):
     return memoire
 
 
-def statistiques(chemin):
-    """Ce qu'un raster contient vraiment : de quoi juger sur pièces."""
+def statistiques(chemin, epsg=EPSG_TRAVAIL):
+    """Ce qu'un raster contient vraiment : de quoi juger sur pièces.
+
+    `scr_conforme` se juge contre `epsg`, et non contre le Lambert 93 : une
+    mosaïque américaine en UTM est conforme à son propre SCR, pas à celui de
+    la France.
+    """
     from osgeo import gdal, osr
 
     gdal.UseExceptions()
@@ -166,7 +178,7 @@ def statistiques(chemin):
     bande = jeu.GetRasterBand(1)
     geotransform = jeu.GetGeoTransform()
     attendu = osr.SpatialReference()
-    attendu.ImportFromEPSG(EPSG_TRAVAIL)
+    attendu.ImportFromEPSG(epsg)
     scr = jeu.GetSpatialRef()
     minimum, maximum, moyenne, ecart = bande.ComputeStatistics(False)
     infos = {

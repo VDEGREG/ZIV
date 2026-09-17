@@ -21,14 +21,13 @@ from .geoplateforme import EPSG_TRAVAIL, ErreurGeoplateforme, format_octets, url
 
 MANIFESTE = "_dalles.json"
 
-# Signatures TIFF : petit-boutiste, gros-boutiste, et BigTIFF.
-_SIGNATURES = (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")
-
-
 # Attente avant la Nieme nouvelle tentative, en secondes. Volontairement
 # courte : elle suffit a laisser passer un 504 passager sans rendre une
 # annulation lente a prendre effet.
 ATTENTES = {1: 2.0, 2: 5.0}
+
+# Signatures TIFF : petit-boutiste, gros-boutiste, et BigTIFF.
+_SIGNATURES = (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")
 
 
 class JournalMuet:
@@ -87,6 +86,15 @@ def corriger_georeference(chemin):
         jeu = None
 
 
+def _corriger_et_dire(chemin):
+    """Défaut d'`apres_arrivee` : remet le SCR d'aplomb et le dit au journal.
+
+    Le libellé est celui d'origine, mot pour mot : la sortie de la chaîne
+    française ne doit pas bouger d'un caractère.
+    """
+    return ", georeferencement corrige" if corriger_georeference(chemin) else ""
+
+
 def _verifier_contenu(chemin, octets):
     """Un GeoTIFF, ou une page d'erreur déguisée en succès ?"""
     with open(chemin, "rb") as flux:
@@ -101,13 +109,31 @@ def _verifier_contenu(chemin, octets):
 
 
 def telecharger_dalles(dalles, dossier, resolution, transport=None, journal=None,
-                       forcer=False, tentatives=3, est_annule=None):
+                       forcer=False, tentatives=3, est_annule=None,
+                       url_a_la_resolution=None, apres_arrivee=None):
     """Télécharge les dalles à la résolution demandée. Renvoie les chemins.
 
     Une dalle déjà présente à la même résolution n'est pas retéléchargée, sauf
     `forcer`. La progression et le volume sont journalisés au fur et à mesure :
     on doit pouvoir arrêter en connaissance de cause.
+
+    Deux points d'injection, pour que ce cache — reprises, fichier `.partiel`,
+    trois tentatives, annulation, reniflement de signature — serve aussi un
+    service qui n'est pas celui de l'IGN :
+
+      * `url_a_la_resolution(url, resolution)` rend `(url, effective, largeur,
+        hauteur)`. Le défaut réécrit `WIDTH`/`HEIGHT` d'une requête WMS, ce qui
+        est propre à la Géoplateforme ; un ImageServer ArcGIS attend
+        `size=largeur,hauteur` en un seul paramètre.
+      * `apres_arrivee(chemin)` rend un suffixe de journal, vide s'il n'y a rien
+        à dire. Le défaut remet d'aplomb le SCR bancal des dalles IGN. Le 3DEP
+        américain, lui, livre un SCR propre mais **aucun sans-donnée** : c'est
+        là qu'il faut le poser.
+
+    Omettre les deux rend exactement le comportement d'origine.
     """
+    url_a_la_resolution = url_a_la_resolution or url_a_resolution
+    apres_arrivee = apres_arrivee or _corriger_et_dire
     from .geoplateforme import TransportRequests
 
     transport = transport or TransportRequests()
@@ -122,7 +148,7 @@ def telecharger_dalles(dalles, dossier, resolution, transport=None, journal=None
             journal.warning("Téléchargement interrompu à la dalle %d/%d." % (numero, len(dalles)))
             break
 
-        url, effective, largeur, hauteur = url_a_resolution(dalle.url, resolution)
+        url, effective, largeur, hauteur = url_a_la_resolution(dalle.url, resolution)
         cle = _cle(dalle.nom, effective)
         fichier = dossier / ("%s_%gm.tif" % (dalle.nom, effective))
 
@@ -133,7 +159,7 @@ def telecharger_dalles(dalles, dossier, resolution, transport=None, journal=None
 
         octets = _telecharger_une(url, fichier, transport, tentatives,
                                   attendre=_attendeur(est_annule))
-        corrigee = corriger_georeference(fichier)
+        mention = apres_arrivee(fichier)
         manifeste[cle] = {
             "fichier": fichier.name,
             "resolution": effective,
@@ -146,7 +172,7 @@ def telecharger_dalles(dalles, dossier, resolution, transport=None, journal=None
         journal.info(
             "Dalle %d/%d : %s (%s, %d x %d px%s)"
             % (numero, len(dalles), dalle.nom, format_octets(octets), largeur, hauteur,
-               ", georeferencement corrige" if corrigee else "")
+               mention)
         )
 
     _ecrire_manifeste(dossier, manifeste)
@@ -183,6 +209,12 @@ def _telecharger_une(url, fichier, transport, tentatives, attendre=None):
 
     Écrire directement sous le nom final laisserait, en cas de coupure, un
     fichier tronqué que le cache reprendrait ensuite pour argent comptant.
+
+    Les tentatives sont ESPACÉES. Mesuré le 2026-09-09 : le 3DEP américain rend
+    des HTTP 504 passagers, et trois tentatives immédiates n'en sont qu'une avec
+    des étapes en plus — un service momentanément saturé l'est encore vingt
+    millisecondes plus tard. L'attente reste courte (2 s puis 5 s) et sensible
+    à l'annulation : elle ne rend pas le greffon sourd.
     """
     temporaire = fichier.with_suffix(fichier.suffix + ".partiel")
     dernier = None

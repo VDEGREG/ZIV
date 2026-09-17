@@ -3,16 +3,20 @@ ZIV_prime - IGN LiDAR HD import and ZIV Processing algorithm.
 
 Part of ZIV_prime, a GNU GPL v3 (or later) licensed QGIS plugin by G. DELSIGNE.
 
-Since 1.4.0 the IGN LiDAR HD tile import (discovery, download, mosaicking) is
-this plugin's own code, in ``import_dalles/``. Since 1.5.0 the visibility
-engine and the two Processing algorithms are likewise original code, in
-``moteur_visibilite/`` and ``algorithmes_ziv/`` - no third-party code remains
-in this package.
+The tile import (discovery, download, mosaicking) is this plugin's own code, in
+``import_dalles/``; so are the visibility engine and the two Processing
+algorithms, in ``moteur_visibilite/`` and ``algorithmes_ziv/`` - no third-party
+code remains in this package.
+
+Carried over UNCHANGED from ZIV_prime 1.5.3. The United States chain is added
+in the next version, as a parallel branch selected by the area of interest; the
+France path below is not meant to be refactored on the way.
 
 See ``LICENSE`` and ``README.md`` at the root of the plugin for the full terms.
 """
 import concurrent.futures
 import contextlib
+import glob
 import json
 import os
 import shutil
@@ -40,6 +44,7 @@ from qgis.core import (
     QgsFillSymbol,
     QgsGeometry,
     QgsMessageLog,
+    QgsProcessingException,
     QgsPointCloudClassifiedRenderer,
     QgsPointCloudLayer,
     QgsPointXY,
@@ -80,7 +85,7 @@ PLUGIN_DISPLAY_NAME = "Zones d'influence visuelle (ZIV)"
 # pour qu'un greffon hôte puisse les adapter à son usage sans toucher à ce
 # fichier — par exemple remplacer le libellé par « Hauteur des panneaux en
 # (m) » et la valeur par défaut par 4,3 m.
-ZIV_HAUTEUR_LIBELLE = "ZIV : hauteur de l'observateur (en mètres)"
+ZIV_HAUTEUR_LIBELLE = 'Viewshed: observer height (metres)'
 ZIV_HAUTEUR_DEFAUT = 1.7
 
 
@@ -194,11 +199,11 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
 
     # Parameter keys (must match what the user-facing form exposes)
     INPUT = "INPUT"
+    PAYS = "PAYS"
     DATA_TYPE = "DATA_TYPE"
-    FORCE_DOWNLOAD = "FORCE_DOWNLOAD"
     LOAD_LAYER = "LOAD_LAYER"
     MERGE_TILES = "MERGE_TILES"
-    CREATE_ZIV = "CREATE_ZIV"
+    COURBES_NIVEAU = "COURBES_NIVEAU"
     ZIV_RADIUS = "ZIV_RADIUS"
     ZIV_PANEL_HEIGHT = "ZIV_PANEL_HEIGHT"
     ZIV_OUTPUT = "ZIV_OUTPUT"
@@ -211,9 +216,9 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
 
     # ZIV symbology options (cf. audit V7)
     ZIV_SYMBOLOGY_OPTIONS = [
-        "Spotlight nuit (défaut) — non visible en noir 80 %, visible transparent",
-        "Dégradé chaud — blanc → jaune → orange → rouge (style v1.3.x)",
-        "Rouge translucide — visible en rouge 30 %, non visible transparent",
+        'Night spotlight (default) — hidden in 80% black, visible transparent',
+        'Warm gradient — white → yellow → orange → red (v1.3.x style)',
+        'Translucent red — visible in 30% red, hidden transparent',
     ]
     # Symbology codes used internally by _apply_ziv_color_ramp
     SYMB_SPOTLIGHT_NIGHT = 0
@@ -227,14 +232,44 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
     # Target resolution (m) the merged DEM is resampled to before the
     # viewshed runs. Lower = finer ZIV but quadratically slower (cells
     # scale with 1/res²). 5 m → 2 m multiplies the cell count by ~6.25×.
+    # Maille de travail de la ZIV, la meme pour tout le monde : le choix
+    # offert au formulaire a ete retire le 2026-09-16 (une question de plus a
+    # l'ouverture, pour un reglage que personne n'a a arbitrer). Tout le code
+    # en aval lit `self.ZIV_TARGET_RES_M`.
+    # Ce que coute cette valeur unique, mesure le 2026-09-10 sur une plaine de
+    # l'Illinois : a 2 m la ZIV suit le micro-relief agricole (sigma 20 cm) et
+    # rend 53 000 m de lisiere par km2, soit des plages de 24 m — illisible ;
+    # a 10 m, 8 200 m de lisiere, des plages de 170 m et un raster 25 fois
+    # plus leger. C'est en terrain PLAT que la finesse se paie.
     ZIV_TARGET_RES_M = 2.0
+    # Le terrain d'ou l'on tire les COURBES n'a pas a etre aussi fin que la
+    # ZIV : au metre il porte encore le micro-relief agricole, et le trace se
+    # fragmente. Mesure du 2026-09-14 sur une emprise francaise, equidistance
+    # imposee de 5 m : le MNS rend 3 433 troncons, le MNT a 2 m encore 4 744
+    # avant ecartement des coquilles. Une courbe topographique se lit a la
+    # dizaine de metres — c'est aussi l'echelle des cartes au 1:25 000.
+    RESOLUTION_COURBES = 10.0
+
+    # Pays et source de donnees. « Automatique » deduit le pays du centroide de
+    # l'emprise, reprojete en WGS84 : les deux couvertures ne se recoupent pas,
+    # donc la detection est sans ambiguite. Les deux autres valeurs IMPOSENT le
+    # fournisseur — utile pour qu'un modele Processing enregistre porte le pays
+    # noir sur blanc, ce qui se defend mieux dans une etude d'impact qu'un
+    # modele qui commute selon la geometrie.
+    PAYS_OPTIONS = [
+        'Automatic (from the area of interest)',
+        "France — IGN LiDAR HD",
+        'United States (CONUS) — USGS 3DEP',
+    ]
+    # Meme ordre que PAYS_OPTIONS. None signifie « laisser la detection faire ».
+    PAYS_IDS = [None, "france_ign", "usa_3dep"]
 
     # Options for data types
     DATA_TYPE_OPTIONS = [
-        "MNT (Digital Terrain Model)",
-        "MNS (Digital Surface Model)",
-        "MNH (Digital Height Model)",
-        "LIDAR (Point Cloud)",
+        'DTM — Digital Terrain Model (bare earth)',
+        'DSM — Digital Surface Model (vegetation and buildings included)',
+        'DHM — Digital Height Model (objects above ground)',
+        'LiDAR — classified point cloud',
     ]
 
     # Mapping to WFS codes (Updated based on user input and IGN Géoplateforme)
@@ -255,61 +290,139 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         super().__init__()
         self.logger = None
         self._temp_files = set()  # Track temporary files for cleanup
+        # Le terrain mis de cote avant la gravure de la surface occultante,
+        # d'ou se tirent les courbes de niveau. Remis a vide ici et pas
+        # seulement par `getattr` : si une instance servait deux fois, des
+        # courbes francaises se tireraient du terrain americain precedent.
+        self._terrain_nu = ""
+        # Vrai quand le fichier de travail est DEJA un terrain : il n'y a alors
+        # ni terrain nu a part, ni raison d'avertir.
+        self._courbes_sur_le_terrain = False
 
     def tr(self, string):
         """Returns a translatable string with the self.tr() function."""
         return QCoreApplication.translate("Processing", string)
 
+    def createCustomParametersWidget(self, parent):
+        """Le formulaire, habille de deux boutons FR / EN.
+
+        QGIS appelle cette methode avant de construire son propre formulaire —
+        c'est le point d'accroche officiel, celui qu'emploient les algorithmes
+        GDAL. Rendre None fait retomber QGIS sur son formulaire habituel : le
+        greffon perd les boutons, jamais l'algorithme.
+        """
+        try:
+            from .dialogue_langue import construire
+
+            return construire(self, parent)
+        except Exception:
+            return None
+
     def createInstance(self):
         return LidarDownloaderAlgorithm()
+
+    # ---- Choix du pays ---------------------------------------------------
+
+    def _choisir_fournisseur(self, aoi_geometry, source_crs):
+        """Choisit le fournisseur de donnees d'apres l'emprise, et le memorise.
+
+        A appeler UNE fois, dans `processAlgorithm`, avant toute reprojection :
+        c'est le seul instant ou l'emprise est encore dans son systeme d'origine.
+        Trois valeurs sont posees sur l'instance :
+
+          * `_fournisseur`     — l'objet fournisseur, interroge en aval ;
+          * `_epsg_travail`    — le SCR projete metrique de tout le calcul ;
+          * `_aoi_bbox_wgs84`  — l'emprise en degres, que `resolution_native`
+            est seul a savoir consommer et qui n'est plus reconstituable une
+            fois la geometrie reprojetee.
+
+        Rien n'est pose au niveau de la classe ni dans `initAlgorithm` :
+        `createInstance()` rend une instance neuve a chaque execution, et un
+        etat de pays partage entre executions serait imprevisible.
+        """
+        from . import fournisseurs
+
+        wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
+        # Sur une COPIE : `transform()` mute la geometrie en place, et l'emprise
+        # d'origine est encore necessaire a tout ce qui suit.
+        en_degres = QgsGeometry(aoi_geometry)
+        if source_crs.authid() != wgs84.authid():
+            en_degres.transform(QgsCoordinateTransform(
+                source_crs, wgs84, QgsProject.instance()))
+        boite = en_degres.boundingBox()
+        centre = en_degres.centroid().asPoint()
+
+        # `processAlgorithm` pose le journal avant d'arriver ici, mais cette
+        # methode doit rester appelable sans lui : un appel de journal ne casse
+        # jamais un calcul dans ce greffon.
+        journal = self.logger
+        impose = getattr(self, "_pays_impose", None)
+        self._fournisseur = fournisseurs.choisir(
+            centre.x(), centre.y(), force=impose, journal=journal)
+        self._epsg_travail = int(self._fournisseur.crs_travail(
+            centre.x(), centre.y()))
+        self._aoi_bbox_wgs84 = (boite.xMinimum(), boite.yMinimum(),
+                                boite.xMaximum(), boite.yMaximum())
+        if journal is not None:
+            journal.info(
+                "Systeme de travail : EPSG:%d (%s)."
+                % (self._epsg_travail, self._fournisseur.NOM))
+        return self._fournisseur
 
     def name(self):
         return "generate"
 
     def displayName(self):
-        return self.tr("ZIV")
+        return self.tr('Visual influence zone (ZIV)')
 
     def shortHelpString(self):
         return self.tr(
-            """
-ZIV_prime
-
-Télécharge les dalles LiDAR HD de l'IGN (MNT/MNS/MNH/LIDAR) qui intersectent
-votre emprise (AOI) puis génère automatiquement la Zone d'Influence Visuelle
-(ZIV).
-
-Types de données :
-- MNT : Modèle Numérique de Terrain (sol nu)
-- MNS : Modèle Numérique de Surface (végétation et bâti compris)
-- MNH : Modèle Numérique de Hauteur (objets au-dessus du sol)
-- LIDAR : Nuage de points classifiés brut
-
-Rayon d'analyse (m) :
-- Valeur unique servant à la fois de buffer autour de l'AOI pour le
-  téléchargement ET de rayon d'analyse pour le calcul de la ZIV.
-- Un shapefile du buffer est généré et affiché avec un contour
-  rouge en pointillés (remplissage transparent).
-- « Sortie du rayon d'analyse » fixe où écrire cette couche (.shp, .gpkg
-  ou .geojson) ; laissée vide, elle suit le dossier de travail, qui est
-  temporaire quand la sortie ZIV l'est aussi.
-
-Fusionner les dalles :
-- Force la fusion des dalles MNT/MNS/MNH téléchargées en un raster unique.
-
-Créer la ZIV :
-- Exécute le modèle de traitement « Création ZIV » embarqué sur le MNT
-  fusionné. Les algorithmes de visibilité sont intégrés dans le plugin —
-  aucune dépendance externe n'est nécessaire.
-- Le raster de sortie est stylisé en "effet nuit" : les zones non visibles
-  (valeurs 0 et NoData) sont peintes en noir à 80 % d'opacité ; l'empreinte
-  projet (0.1) et les zones réellement visibles (1+) restent transparentes
-  pour laisser apparaître le fond de carte.
-- Masquage automatique : les cellules tombant dans une forêt (BD Forêt IGN)
-  ou sur un bâtiment (BDTOPO) sont forcées à "hors visibilité" — on ne voit
-  pas le projet depuis une canopée ou un toit. Les empreintes sont
-  téléchargées via le WFS IGN ; si indisponible, la ZIV sort inchangée.
-"""
+            '\nZIV_prime\n\nDownloads the national LiDAR elevation tiles that intersect your project area\nand derives the visual influence zone (viewshed) from them.\n\nCountries:\n- France: IGN LiDAR HD (DTM / DSM / DHM / raw point cloud).\n- Contiguous United States: USGS 3DEP for the terrain, LANDFIRE for vegetation\n  height, USA Structures for buildings, TIGER/Line for roads.\n- The country is deduced from the area of interest; the "Country" field forces\n  it, which a saved model should do so that it states its source plainly.\n\nData types:\n- DTM: bare earth.\n- DSM: vegetation and buildings included.\n- DHM: height of the objects above the ground.\n- LiDAR: raw classified point cloud.\n\nAnalysis radius (m):\n- One value, used both as the buffer around the area of interest for the\n  download AND as the analysis radius of the viewshed.\n- The buffer is written as a layer and drawn with a red dashed outline.\n- "Analysis radius output" says where to write it; left empty it follows the\n  working folder, which is temporary when the viewshed output is.\n\nCreate the viewshed:\n- Runs the embedded "Creation ZIV" processing model over the merged terrain.\n  The visibility algorithms ship with the plugin: no companion plugin needed.\n- The output raster is styled as a night effect: hidden areas (0 and NoData)\n  are painted 80% black, while the project footprint (0.1) and the genuinely\n  visible cells (1 and above) stay transparent over the basemap.\n- Masking: cells falling under woodland or on a building are forced out of\n  visibility, because nobody stands on a canopy or a roof. France draws those\n  footprints from BD Foret and BDTOPO, the United States from LANDFIRE and USA\n  Structures. If a service is unavailable the viewshed comes out unmasked\n  rather than not at all.\n\nWhere no 1-metre LiDAR covers the area, the terrain is served at about 10 m and\nthe working resolution is raised to match, rather than interpolated finer than\nthe data really is. The log says so.\n'
         )
+
+    def flags(self):
+        """Cet algorithme doit tourner dans le FIL PRINCIPAL.
+
+        Il ne se contente pas de produire des fichiers : il cree des couches,
+        les habille et les ajoute au projet. Or un objet Qt cree dans un fil
+        de travail n'appartient pas a l'interface qui va l'afficher — les
+        couches se dessinent une fois, puis disparaissent au premier
+        rafraichissement du canevas. C'est ce qu'un utilisateur a rapporte le
+        2026-09-14 : « quand je deplace le fond de carte, les couches
+        nouvellement creees disparaissent ».
+
+        Le prix est connu et assume : l'interface se fige pendant le calcul,
+        faute de fil separe. Des couches stables valent mieux qu'une barre de
+        progression fluide au bout de laquelle il ne reste rien.
+
+        L'enum a change de maison entre Qt5 et Qt6 ; les deux formes existent
+        sur les deux cibles (sonde du 2026-09-14), la moderne d'abord.
+        """
+        base = super().flags()
+        try:
+            from qgis.core import Qgis
+
+            return base | Qgis.ProcessingAlgorithmFlag.NoThreading
+        except Exception:
+            drapeau = getattr(QgsProcessingAlgorithm, "FlagNoThreading", None)
+            return base | drapeau if drapeau is not None else base
+
+    def checkParameterValues(self, parameters, context):
+        """Le rayon d'analyse est obligatoire, bien que declare optionnel.
+
+        Le champ part vide pour que personne ne lance une etude sur un defaut
+        qu'il n'a pas choisi, et seul un parametre optionnel s'affiche vide
+        (mesure du 2026-09-16 : obligatoire et sans defaut, le widget retombe
+        sur son minimum et propose « 1,000000 »). L'obligation se porte donc
+        ici : QGIS affiche le message dans le formulaire et ne lance rien.
+        """
+        valeur = parameters.get(self.ZIV_RADIUS)
+        if valeur is None or str(valeur).strip() in ("", "NULL"):
+            return False, self.tr(
+                "Enter an analysis radius, in metres: it sets both the area "
+                "of terrain downloaded and the extent of the viewshed."
+            )
+        return super().checkParameterValues(parameters, context)
 
     def initAlgorithm(self, config=None):
         """Initialize the algorithm parameters."""
@@ -318,25 +431,44 @@ Créer la ZIV :
         self.addParameter(
             QgsProcessingParameterFeatureSource(
                 self.INPUT,
-                self.tr("Sélection de la ZIP"),
+                self.tr('Project area (AOI)'),
                 [QgsProcessing.SourceType.TypeVectorAnyGeometry],
+            )
+        )
+
+        # Pays et source de donnees. Place juste apres la ZIP parce que le pays
+        # en est DEDUIT : le combo n'est qu'une surcharge, et son defaut
+        # « Automatique » convient a tout le monde. Il reste visible plutot que
+        # range dans les parametres avances, pour qu'on voie d'un coup d'oeil
+        # que le greffon ne couvre pas que la France.
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.PAYS,
+                self.tr('Country / data source'),
+                options=[self.tr(o) for o in self.PAYS_OPTIONS],
+                defaultValue=0,
             )
         )
 
         # Analysis radius - used BOTH for tile download buffer AND ZIV.
         # Placed next to the ZIP because it drives the WFS query upstream.
+        # Le champ part VIDE : un rayon depend du projet, et un defaut de
+        # 300 m se lancait tel quel sans qu'on y pense. « Optionnel » est ici
+        # une mecanique d'affichage, pas une permission — mesure du
+        # 2026-09-16 : un parametre obligatoire sans defaut retombe sur son
+        # minimum et afficherait « 1,000000 ». L'obligation est portee par
+        # `checkParameterValues`.
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.ZIV_RADIUS,
                 self.tr(
-                    "Rayon d'analyse (mètres) - utilisé pour le buffer de "
-                    "téléchargement et la ZIV"
+                    'Analysis radius (metres) - used both for the download buffer and the viewshed'
                 ),
                 type=QgsProcessingParameterNumber.Type.Double,
-                defaultValue=300.0,
+                defaultValue=None,
                 minValue=1.0,
                 maxValue=50000.0,
-                optional=False,
+                optional=True,
             )
         )
 
@@ -346,27 +478,16 @@ Créer la ZIV :
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.DATA_TYPE,
-                self.tr("Type de données à télécharger"),
-                options=self.DATA_TYPE_OPTIONS,
+                self.tr('Data type to download'),
+                options=[self.tr(o) for o in self.DATA_TYPE_OPTIONS],
                 defaultValue=1,
             )
         )
 
         self.addParameter(
             QgsProcessingParameterBoolean(
-                self.FORCE_DOWNLOAD,
-                self.tr(
-                    "Forcer le re-téléchargement (supprime et retélécharge "
-                    "les dalles déjà présentes localement)"
-                ),
-                defaultValue=False,
-            )
-        )
-
-        self.addParameter(
-            QgsProcessingParameterBoolean(
                 self.MERGE_TILES,
-                self.tr("Fusionner les dalles téléchargées (MNT/MNS/MNH)"),
+                self.tr('Merge the downloaded tiles (DTM/DSM/DHM)'),
                 defaultValue=True,
             )
         )
@@ -374,19 +495,20 @@ Créer la ZIV :
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.LOAD_LAYER,
-                self.tr("Charger les données après le téléchargement"),
+                self.tr('Load the data once downloaded'),
                 defaultValue=True,
             )
         )
 
         # --- 3) ZIV ---------------------------------------------------------
+        # Les courbes de niveau prennent la place de l'ancienne case « creer la
+        # ZIV » : celle-ci decrivait le principe meme du greffon. Croisees avec
+        # la ZIV, elles disent POURQUOI une zone voit ou ne voit pas.
         self.addParameter(
             QgsProcessingParameterBoolean(
-                self.CREATE_ZIV,
-                self.tr(
-                    "Créer la Zone d'Influence Visuelle (ZIV) à partir du MNT fusionné"
-                ),
-                defaultValue=True,
+                self.COURBES_NIVEAU,
+                self.tr("Also produce the contour lines of the terrain"),
+                defaultValue=False,
             )
         )
 
@@ -418,8 +540,8 @@ Créer la ZIV :
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.ZIV_SYMBOLOGY,
-                self.tr("ZIV : symbologie"),
-                options=self.ZIV_SYMBOLOGY_OPTIONS,
+                self.tr('Viewshed: symbology'),
+                options=[self.tr(o) for o in self.ZIV_SYMBOLOGY_OPTIONS],
                 defaultValue=default_symb,
             )
         )
@@ -431,8 +553,7 @@ Créer la ZIV :
             QgsProcessingParameterBoolean(
                 self.SUGGEST_VIEWPOINTS,
                 self.tr(
-                    "Suggérer des points de vue photo (photomontages) "
-                    "sur les secteurs les plus visibles"
+                    'Suggest photo viewpoints (photomontages) on the most visible sectors'
                 ),
                 defaultValue=False,
             )
@@ -441,8 +562,7 @@ Créer la ZIV :
             QgsProcessingParameterNumber(
                 self.NB_VIEWPOINTS,
                 self.tr(
-                    "Points de vue photo : nombre à générer "
-                    "(réparti proche / moyen / éloigné)"
+                    'Photo viewpoints: how many to generate (spread near / medium / far)'
                 ),
                 type=QgsProcessingParameterNumber.Type.Integer,
                 defaultValue=6,
@@ -456,7 +576,7 @@ Créer la ZIV :
         self.addParameter(
             QgsProcessingParameterRasterDestination(
                 self.ZIV_OUTPUT,
-                self.tr("Sortie ZIV (raster) - laisser vide pour temporaire"),
+                self.tr('Viewshed output (raster) - leave empty for a temporary file'),
                 optional=True,
                 createByDefault=False,
             )
@@ -470,8 +590,7 @@ Créer la ZIV :
             QgsProcessingParameterVectorDestination(
                 self.RADIUS_OUTPUT,
                 self.tr(
-                    "Sortie du rayon d'analyse (vecteur) - laisser vide pour "
-                    "le dossier de travail"
+                    'Analysis radius output (vector) - leave empty for the working folder'
                 ),
                 type=QgsProcessing.SourceType.TypeVectorPolygon,
                 optional=True,
@@ -482,7 +601,7 @@ Créer la ZIV :
         # Add output definitions
         self.addOutput(
             QgsProcessingOutputFolder(
-                "OUTPUT_DIRECTORY", self.tr("Répértoire de téléchargement")
+                "OUTPUT_DIRECTORY", self.tr('Download directory')
             )
         )
 
@@ -493,6 +612,17 @@ Créer la ZIV :
             QgsProcessingOutputString(
                 "OUTPUT_FILES",
                 self.tr("Data files for iteration (semicolon separated)"),
+            )
+        )
+
+        # Les courbes de niveau : declarees pour de bon. Une cle ajoutee au
+        # dictionnaire de resultat sans `addOutput` n'existe pas pour
+        # Processing, qui n'enumere que `outputDefinitions()` — le fichier
+        # etait produit mais invisible au panneau de resultats et inchaînable
+        # dans un modele.
+        self.addOutput(
+            QgsProcessingOutputFile(
+                "COURBES_NIVEAU", self.tr("Contour lines")
             )
         )
 
@@ -658,7 +788,7 @@ Créer la ZIV :
         radius: float,
         chemin_demande: str = "",
     ) -> str:
-        """Save the analysis buffer geometry as a Shapefile in EPSG:2154.
+        """Save the analysis buffer geometry as a Shapefile in the working CRS.
 
         Uses a unique timestamped filename so successive runs never collide
         with a shapefile still locked by QGIS from a previous execution
@@ -684,7 +814,11 @@ Créer la ZIV :
             "sortie vide pour obtenir un nom horodate."
         )
         try:
-            crs = QgsCoordinateReferenceSystem("EPSG:2154")
+            # Le defaut a 2154 n'est pas decoratif : cette methode est
+            # appelable par un chemin qui n'a pas traverse processAlgorithm, et
+            # doit alors se comporter comme la chaine francaise d'origine.
+            crs = QgsCoordinateReferenceSystem(
+                "EPSG:%d" % getattr(self, "_epsg_travail", 2154))
             fields = QgsFields()
             fields.append(QgsField("name", QVariant.String, len=50))
             fields.append(QgsField("radius_m", QVariant.Double))
@@ -1017,6 +1151,127 @@ Créer la ZIV :
         layer.triggerRepaint()
         self.logger.info("ZIV symbology: translucent red (uniform)")
 
+    def _resoudre_emprise(self, zip_source):
+        """Rend la ZIP comme QgsVectorLayer valide, ou None.
+
+        `parameters[INPUT]` n'est une couche que lorsque l'algorithme est
+        appele depuis Python. Depuis le FORMULAIRE, c'est un identifiant de
+        couche ou un QgsProcessingFeatureSourceDefinition, et
+        `QgsVectorLayer(str(...), ..., "ogr")` rend alors une couche invalide.
+        Le calage etait donc saute a chaque execution par l'interface — sans
+        consequence en France, ou la ZIP et le MNS partagent le Lambert 93,
+        mais fatal des que le SCR de travail differe de celui du projet.
+        `parameterAsVectorLayer` a deja resolu la couche pour la legende :
+        c'est elle qui fait foi.
+        """
+        from qgis.core import QgsProcessingUtils
+
+        if isinstance(zip_source, QgsVectorLayer) and zip_source.isValid():
+            return zip_source
+
+        deja_resolue = getattr(self, "_ziv_zip_layer", None)
+        if isinstance(deja_resolue, QgsVectorLayer) and deja_resolue.isValid():
+            return deja_resolue
+
+        # Un QgsProcessingFeatureSourceDefinition porte la source dans
+        # `source`, elle-meme une QgsProperty : dérouler avant de resoudre.
+        candidat = zip_source
+        interne = getattr(candidat, "source", None)
+        if interne is not None:
+            candidat = getattr(interne, "staticValue", lambda: interne)()
+
+        contexte = getattr(self, "_contexte_processing", None)
+        if contexte is not None:
+            try:
+                trouvee = QgsProcessingUtils.mapLayerFromString(
+                    str(candidat), contexte)
+                if isinstance(trouvee, QgsVectorLayer) and trouvee.isValid():
+                    return trouvee
+            except Exception:
+                pass
+
+        # Dernier recours sans etat : un identifiant de couche se resout sur
+        # le projet courant. Sans cela, la resolution dependrait de ce que
+        # `processAlgorithm` a bien voulu retenir avant — un contrat trop
+        # fragile pour un garde-fou.
+        du_projet = QgsProject.instance().mapLayer(str(candidat))
+        if isinstance(du_projet, QgsVectorLayer) and du_projet.isValid():
+            return du_projet
+
+        depuis_fichier = QgsVectorLayer(str(candidat), "emprise_projet", "ogr")
+        return depuis_fichier if depuis_fichier.isValid() else None
+
+    def _donner_une_surface_aux_points(self, couche, dem_path):
+        """Remplace chaque entite PONCTUELLE par un carre d'une cellule.
+
+        Pourquoi c'est necessaire. Le modele fabrique ses observateurs avec
+        `native:pointsalonglines`, applique a l'emprise. Sur une entree
+        ponctuelle, cet algorithme rend bien UNE entite — mais sa geometrie est
+        VIDE (mesure du 2026-09-16). Le modele echoue alors sur « Aucun point
+        d'observation ne tombe sur le terrain fourni », et l'utilisateur qui
+        vient de pointer un mat ou une eolienne n'obtient rien.
+
+        On donne donc au point le plus petit contour qui ait un sens : la
+        cellule du terrain ou il se trouve. Mesure a l'appui, un carre de 2 m
+        rend exactement UN observateur, a 1 m du point d'origine — moins d'une
+        cellule, donc invisible dans le resultat. Un carre de 20 m en rendrait
+        deux : la taille n'est pas decorative, elle tient au pas de 50 m que le
+        modele emploie le long du contour.
+
+        Les lignes et les polygones passent inchanges : eux rendent des points
+        aux bonnes coordonnees.
+        """
+        try:
+            ponctuelles = [entite for entite in couche.getFeatures()
+                           if entite.geometry() is not None
+                           and not entite.geometry().isEmpty()
+                           and entite.geometry().length() == 0
+                           and entite.geometry().area() == 0]
+            if not ponctuelles:
+                return couche
+
+            cellule = float(getattr(self, "_resolution_terrain", 0) or 0)
+            if cellule <= 0:
+                jeu = QgsRasterLayer(str(dem_path), "mns_maille")
+                cellule = (jeu.rasterUnitsPerPixelX()
+                           if jeu.isValid() else self.ZIV_TARGET_RES_M)
+            demi = max(float(cellule), 0.5) / 2.0
+
+            surface = QgsVectorLayer(
+                "Polygon?crs=" + couche.crs().authid(),
+                "emprise_projet_ponctuelle", "memory")
+            surface.dataProvider().addAttributes(couche.fields())
+            surface.updateFields()
+            copies = []
+            for entite in couche.getFeatures():
+                geometrie = entite.geometry()
+                if geometrie is None or geometrie.isEmpty():
+                    continue
+                if geometrie.length() == 0 and geometrie.area() == 0:
+                    centre = geometrie.centroid().asPoint()
+                    geometrie = QgsGeometry.fromRect(QgsRectangle(
+                        centre.x() - demi, centre.y() - demi,
+                        centre.x() + demi, centre.y() + demi))
+                copie = QgsFeature(surface.fields())
+                copie.setGeometry(geometrie)
+                copie.setAttributes(entite.attributes())
+                copies.append(copie)
+            if not copies:
+                return couche
+            surface.dataProvider().addFeatures(copies)
+            surface.updateExtents()
+            self.logger.info(
+                "Emprise ponctuelle : %d point(s) etendu(s) a la cellule du "
+                "terrain (%.1f m de cote). Chacun vaut UN observateur portant "
+                "un objet de la hauteur demandee ; le resultat se lit « d'ou "
+                "voit-on cet objet »." % (len(ponctuelles), 2.0 * demi))
+            return surface
+        except Exception as erreur:
+            self.logger.warning(
+                "Emprise ponctuelle non etendue (%s) : le modele risque de ne "
+                "trouver aucun observateur." % erreur)
+            return couche
+
     def _caler_emprise_sur_le_mnt(self, zip_source, dem_path):
         """Reprojette l'emprise projet dans le systeme du MNS et verifie le recouvrement.
 
@@ -1033,12 +1288,21 @@ Créer la ZIV :
                 )
                 return zip_source
 
-            couche = zip_source
-            if not isinstance(couche, QgsVectorLayer):
-                couche = QgsVectorLayer(str(zip_source), "emprise_projet", "ogr")
-            if not couche.isValid():
-                self.logger.warning("Emprise projet illisible : passee telle quelle.")
-                return zip_source
+            couche = self._resoudre_emprise(zip_source)
+            if couche is None:
+                # Passer l'emprise telle quelle a deja coute cher : depuis le
+                # formulaire, la ZIP repartait dans son SCR d'origine pendant
+                # que le viewshed sortait dans celui du MNS, et gdal:merge
+                # faisait l'union de deux rasters distants de milliers de
+                # kilometres. Mieux vaut ne rien rendre que rendre cela.
+                self.logger.error(
+                    "Emprise projet impossible a resoudre en couche : le calage "
+                    "sur le MNS ne peut pas etre verifie. Rien n'est calcule, "
+                    "car une emprise non calee produit une ZIV de plusieurs "
+                    "dizaines de gigaoctets. Charger la ZIP comme une couche "
+                    "vecteur du projet."
+                )
+                return None
 
             scr_mnt = mnt.crs()
             if couche.crs() != scr_mnt:
@@ -1049,8 +1313,20 @@ Créer la ZIV :
                 transformation = QgsCoordinateTransform(
                     couche.crs(), scr_mnt, QgsProject.instance()
                 )
+                # Le type de la SOURCE, jamais « Polygon » code en dur : une
+                # couche memoire REFUSE une geometrie d'un autre type, et le
+                # refus de `addFeatures` ne leve pas. Un observateur ponctuel
+                # disparaissait donc ici — mesure du 2026-09-17 : addFeatures
+                # rend False, la couche calee sort VIDE, et l'emprise nulle
+                # faisait echouer le controle de recoupement deux lignes plus
+                # bas, sur un message qui accusait le SCR de l'utilisateur.
+                # Invisible en France (projet et MNT en Lambert 93, donc pas
+                # de reprojection), systematique aux Etats-Unis, ou le calcul
+                # se fait en UTM.
                 calee = QgsVectorLayer(
-                    "Polygon?crs=" + scr_mnt.authid(), "emprise_projet_calee", "memory"
+                    "%s?crs=%s" % (QgsWkbTypes.displayString(couche.wkbType()),
+                                   scr_mnt.authid()),
+                    "emprise_projet_calee", "memory"
                 )
                 calee.dataProvider().addAttributes(couche.fields())
                 calee.updateFields()
@@ -1069,6 +1345,18 @@ Créer la ZIV :
                     return None
                 calee.dataProvider().addFeatures(entites)
                 calee.updateExtents()
+                # Le fournisseur memoire ecarte EN SILENCE ce qu'il n'accepte
+                # pas. Compter ce qui est entre evite de poursuivre avec une
+                # couche vide, dont l'echec serait impute au SCR.
+                if calee.featureCount() != len(entites):
+                    self.logger.error(
+                        "Emprise projet : %d entite(s) sur %d ont ete refusees "
+                        "par la couche reprojetee (type %s). Rien n'est "
+                        "calcule."
+                        % (len(entites) - calee.featureCount(), len(entites),
+                           QgsWkbTypes.displayString(couche.wkbType()))
+                    )
+                    return None
                 couche = calee
 
             if not couche.extent().intersects(mnt.extent()):
@@ -1085,6 +1373,221 @@ Créer la ZIV :
                 "Calage de l'emprise impossible (%s) : passee telle quelle." % erreur
             )
             return zip_source
+
+    # Valeur de l'empreinte du projet dans la ZIV. La chaine lit 0 comme
+    # « non vu », 0,1 comme « c'est le projet lui-meme » et 1 et plus comme
+    # du visible. Le modele la grave ; le masquage l'efface ; on la rend.
+    EMPREINTE_PROJET = 0.1
+
+    # Au-dessous de cette surface, une tache « non vue » isolee au milieu du
+    # visible est tenue pour un artefact et comblee. 24 m2, soit un carre de
+    # 5 m de cote — un abri de jardin, pas une maison.
+    #
+    # Le seuil a fait l'aller-retour le 2026-09-17 : 24, puis 100 sur « le
+    # moins possible » de mouchetis, puis 24 de nouveau. Mesure sur la ZIV
+    # americaine, en cumule : 24 m2 comble 97 cellules, 50 m2 en comble 165,
+    # 100 m2 en comble 218, 400 m2 en comble 693. Le choix se lit donc ainsi :
+    # a 24 m2 on n'efface que du bruit, a 100 on emporte une maison isolee, et
+    # au-dela un bois de 20 m de cote s'en irait sans laisser de trace.
+    SURFACE_MINIMALE_TACHE_M2 = 24.0
+
+    def _gommer_le_mouchetis(self, chemin_ziv):
+        """Comble les petites taches « non vues » isolees dans du visible.
+
+        Pourquoi seulement dans ce sens. Un tamis ordinaire agit des deux
+        cotes : il retirerait aussi les ilots VISIBLES isoles. Mesure du
+        2026-09-17 sur une ZIV francaise, ou le visible est rare et fragmente
+        (0,5 % des cellules) : un tamis a 36 m2 y emporte 829 des 5 456
+        cellules vues, soit 15 % de toute la visibilite. Or une trouee d'ou
+        l'on voit le projet est precisement ce qu'une etude d'impact doit
+        montrer. On ne retire donc JAMAIS de visibilite : on n'en ajoute un
+        peu, ce qui est majorant, donc du bon cote.
+
+        Comment. `gdal.SieveFilter` — livre avec GDAL, aucune dependance
+        nouvelle — sur un masque binaire vu / non vu ; on ne garde que les
+        cellules qu'il fait passer de non vu a vu. Chacune recoit ensuite la
+        PLUS PETITE valeur vue parmi ses voisins : une cellule comblee ne
+        pretend pas voir mieux que le moins bien loti de ses voisins.
+
+        L'empreinte du projet et le sans-donnee sont laisses de cote : la
+        premiere est regravee juste apres, le second n'est pas un trou mais
+        l'absence de calcul.
+
+        Meilleur effort : rend le nombre de cellules comblees, 0 si rien n'a
+        pu etre fait. Un rendu mouchete vaut mieux que pas de ZIV.
+        """
+        if not chemin_ziv:
+            return 0
+        try:
+            import numpy as np
+            from osgeo import gdal
+
+            gdal.UseExceptions()
+            jeu = gdal.Open(str(chemin_ziv), gdal.GA_Update)
+            if jeu is None:
+                return 0
+            try:
+                grille = jeu.GetGeoTransform()
+                cote = abs(grille[1]) or self.ZIV_TARGET_RES_M
+                seuil = int(round(self.SURFACE_MINIMALE_TACHE_M2
+                                  / (cote * cote)))
+                if seuil < 2:
+                    # Une seule cellule fait deja plus que la surface tenue
+                    # pour negligeable : il n'y a pas d'artefact a gommer.
+                    self.logger.info(
+                        "Mouchetis : maille de %g m, une cellule vaut deja "
+                        "%g m2 — rien a gommer." % (cote, cote * cote))
+                    return 0
+
+                bande = jeu.GetRasterBand(1)
+                valeurs = np.asarray(bande.ReadAsArray(), dtype="float32")
+                sans_donnee = bande.GetNoDataValue()
+                absente = (np.isclose(valeurs, sans_donnee)
+                           if sans_donnee is not None
+                           else np.zeros(valeurs.shape, dtype=bool))
+                vu = (valeurs >= 1.0) & ~absente
+
+                memoire = gdal.GetDriverByName("MEM")
+                lignes, colonnes = valeurs.shape
+                entree = memoire.Create("", colonnes, lignes, 1, gdal.GDT_Byte)
+                entree.GetRasterBand(1).WriteArray(vu.astype("uint8"))
+                sortie = memoire.Create("", colonnes, lignes, 1, gdal.GDT_Byte)
+                gdal.SieveFilter(entree.GetRasterBand(1), None,
+                                 sortie.GetRasterBand(1), seuil, 8)
+                tamise = np.asarray(sortie.GetRasterBand(1).ReadAsArray()) > 0
+                entree = None
+                sortie = None
+
+                # UNIQUEMENT les trous combles. Ce que le tamis voudrait
+                # retirer par ailleurs est ignore, c'est tout le propos.
+                a_combler = tamise & ~vu & ~absente & (valeurs
+                                                       != self.EMPREINTE_PROJET)
+                nombre = int(a_combler.sum())
+                if nombre == 0:
+                    self.logger.info(
+                        "Mouchetis : aucune tache non vue de moins de %g m2 "
+                        "au milieu du visible." % self.SURFACE_MINIMALE_TACHE_M2)
+                    return 0
+
+                # Une tache de `seuil` cellules a un rayon de quelques
+                # cellules : quatre tours de voisinage suffisent, et la
+                # boucle sort des qu'il n'y a plus rien a remplir.
+                comble = valeurs.copy()
+                vus = vu.copy()
+                for _ in range(4):
+                    reste = a_combler & ~vus
+                    if not reste.any():
+                        break
+                    voisin = self._plus_petit_voisin_vu(comble, vus)
+                    prets = reste & np.isfinite(voisin)
+                    if not prets.any():
+                        break
+                    comble[prets] = voisin[prets]
+                    vus |= prets
+
+                bande.WriteArray(comble)
+                bande.ComputeStatistics(False)
+                jeu.FlushCache()
+                self.logger.info(
+                    "Mouchetis gomme : %d cellule(s) non vues isolees comblees "
+                    "(taches de moins de %g m2, soit %d cellule(s) a la maille "
+                    "de %g m). Aucune visibilite n'a ete retiree."
+                    % (nombre, self.SURFACE_MINIMALE_TACHE_M2, seuil, cote))
+                return nombre
+            finally:
+                # Sous Windows le fichier reste verrouille tant que la
+                # derniere reference vit.
+                jeu = None
+        except Exception as erreur:
+            self.logger.warning(
+                "Mouchetis non gomme (%s) : la ZIV est rendue telle quelle."
+                % erreur)
+            return 0
+
+    @staticmethod
+    def _plus_petit_voisin_vu(valeurs, vu):
+        """Pour chaque cellule, la plus petite valeur vue de ses 8 voisins.
+
+        `inf` la ou aucun voisin n'est vu — l'appelant s'en sert pour savoir
+        ce qu'il peut encore remplir.
+        """
+        import numpy as np
+
+        lignes, colonnes = valeurs.shape
+        grand = np.full((lignes + 2, colonnes + 2), np.inf, dtype="float32")
+        grand[1:-1, 1:-1] = np.where(vu, valeurs, np.inf)
+        decales = [grand[1 + dy:1 + dy + lignes, 1 + dx:1 + dx + colonnes]
+                   for dy in (-1, 0, 1) for dx in (-1, 0, 1)
+                   if (dy, dx) != (0, 0)]
+        return np.minimum.reduce(decales)
+
+    def _rendre_lempreinte_du_projet(self, chemin_ziv, emprise):
+        """Regrave l'emprise du projet a 0,1, APRES le masquage.
+
+        Pourquoi c'est necessaire. Le masquage force « hors visibilite » tout
+        ce que couvrent les bois et le bati, sans regarder ce qu'il efface :
+        l'empreinte du projet y passe comme le reste. Mesure du 2026-09-17 sur
+        une ZIV synthetique — un bois mordant sur l'emprise emporte 600 des
+        1 600 cellules d'empreinte. A l'ecran, la ZIV « deborde » sur la zone
+        de projet, alors que la convention veut qu'elle y soit uniformement a
+        0,1. Le defaut ne tient PAS au mode de saisie de l'emprise : il se
+        produit avec une couche du projet comme avec un trace a la souris, dans
+        les deux pays, des que l'emprise porte du couvert.
+
+        Rendre l'empreinte en dernier plutot que d'apprendre au masquage a
+        l'epargner : il y a deux masquages, l'un vectoriel (France) et l'autre
+        matriciel (Etats-Unis), et un seul endroit ou reposer la valeur.
+
+        Meilleur effort : sans emprise ou sans GDAL, la ZIV est rendue telle
+        quelle — une empreinte entamee vaut mieux que pas de ZIV.
+        """
+        if not chemin_ziv or emprise is None:
+            return False
+        try:
+            from osgeo import ogr, osr
+
+            dossier = Path(str(getattr(self, "_working_dir", "")
+                               or Path(chemin_ziv).parent))
+            chemin = dossier / "_ziv_empreinte_projet.geojson"
+            if chemin.exists():
+                chemin.unlink()
+
+            systeme = osr.SpatialReference()
+            systeme.ImportFromWkt(emprise.crs().toWkt())
+            pilote = ogr.GetDriverByName("GeoJSON")
+            source = pilote.CreateDataSource(str(chemin))
+            couche = source.CreateLayer("empreinte", systeme, ogr.wkbUnknown)
+            definition = couche.GetLayerDefn()
+            nombre = 0
+            for entite in emprise.getFeatures():
+                geometrie = entite.geometry()
+                if geometrie is None or geometrie.isEmpty():
+                    continue
+                copie = ogr.Feature(definition)
+                copie.SetGeometry(ogr.CreateGeometryFromWkt(geometrie.asWkt()))
+                couche.CreateFeature(copie)
+                nombre += 1
+            source = None
+            if nombre == 0:
+                return False
+
+            from . import donnees_ign
+
+            if not donnees_ign.graver_dans_raster(
+                    str(chemin_ziv), str(chemin),
+                    valeur=self.EMPREINTE_PROJET, ajouter=False,
+                    journal=self.logger):
+                return False
+            self.logger.info(
+                "Empreinte du projet rendue a %g apres le masquage (%d "
+                "entite(s)) : la ZIV ne deborde pas sur la zone de projet."
+                % (self.EMPREINTE_PROJET, nombre))
+            return True
+        except Exception as erreur:
+            self.logger.warning(
+                "Empreinte du projet non rendue apres le masquage (%s) : la "
+                "ZIV peut mordre sur la zone de projet." % erreur)
+            return False
 
     def _run_ziv_model(
         self,
@@ -1138,6 +1641,10 @@ Créer la ZIV :
             emprise_calee = self._caler_emprise_sur_le_mnt(zip_source, dem_path)
             if emprise_calee is None:
                 return ""
+            # Une emprise PONCTUELLE n'a pas de contour, et c'est le contour
+            # que le modele parcourt pour poser ses observateurs.
+            emprise_calee = self._donner_une_surface_aux_points(
+                emprise_calee, dem_path)
             params["zip"] = emprise_calee
 
             result = processing.run(model, params, feedback=self.feedback)
@@ -1152,6 +1659,15 @@ Créer la ZIV :
                 ziv_result_path = self._mask_ziv_landcover(
                     ziv_result_path, ziv_output_path
                 )
+                # Le mouchetis se gomme APRES le masquage — c'est lui qui en
+                # produit une partie, un batiment isole faisant une tache de
+                # quelques cellules — et AVANT que l'empreinte ne soit
+                # reposee, pour qu'elle sorte intacte quoi qu'il arrive.
+                self._gommer_le_mouchetis(ziv_result_path)
+                # Le masquage grave sans regarder ce qu'il efface : l'emprise
+                # du projet y passe comme le reste. On la rend EN DERNIER.
+                self._rendre_lempreinte_du_projet(
+                    ziv_result_path, emprise_calee)
                 # Try to auto-load the produced ZIV raster with custom styling.
                 try:
                     layer = QgsRasterLayer(
@@ -1210,6 +1726,603 @@ Créer la ZIV :
             with contextlib.suppress(Exception):
                 self.logger.error(f"Could not show error popup: {e}")
 
+    def _terrain_par_fournisseur(self, aoi_geometry, dossier, charger_couches):
+        """Terrain et surface occultante par le fournisseur, puis chaînage ZIV.
+
+        Remplace, pour un fournisseur qui fournit son terrain, tout le bloc de
+        découverte de dalles : le service américain est transparent, il n'y a
+        rien à découvrir. Le contrat de sortie est celui de la chaîne française
+        — le dictionnaire que `_finalize_result` consomme — de sorte que la
+        suite (ZIV, symbologie, masquage, points de vue, cartouche) ne voit
+        aucune différence.
+
+        Là où les États-Unis ne livrent qu'un terrain nu, la surface occultante
+        est **reconstruite** ici : végétation et bâti gravés en une fois, sur le
+        maximum des deux hauteurs. Un échec de gravure n'arrête pas le calcul —
+        mais il est DIT, parce qu'une ZIV sur terrain nu surestime la visibilité
+        sur le fond, pas dans la marge.
+        """
+        fournisseur = self._fournisseur
+        emprise = aoi_geometry.boundingBox()
+        boite = (emprise.xMinimum(), emprise.yMinimum(),
+                 emprise.xMaximum(), emprise.yMaximum())
+
+        resolution = fournisseur.resolution_de_travail(
+            self.ZIV_TARGET_RES_M, self._aoi_bbox_wgs84, journal=self.logger)
+        self._resolution_terrain = resolution
+
+        est_annule = getattr(self.feedback, "isCanceled", None)
+        try:
+            chemin = fournisseur.terrain(
+                boite, resolution, self._epsg_travail, str(dossier),
+                journal=self.logger, est_annule=est_annule)
+        except Exception as erreur:
+            # Une exception, pas un resultat vide : rendre un dictionnaire ici
+            # faisait dire a QGIS « finished » sur un calcul qui n'avait rien
+            # produit, et l'utilisateur cherchait sa ZIV dans un projet vide.
+            self.logger.error("Terrain indisponible : %s" % erreur)
+            raise QgsProcessingException(
+                "Terrain indisponible, la ZIV n'a pas ete calculee : %s" % erreur)
+
+        if fournisseur.occulte():
+            # Les courbes de niveau se tirent du TERRAIN, jamais de la surface.
+            # La gravure ci-dessous ecrit EN PLACE : passe ce point, le terrain
+            # nu n'existe plus. Or des contours calcules sur la canopee
+            # LANDFIRE, dont la maille est de 30 m, donnent exactement ce qu'un
+            # utilisateur a rapporte le 2026-09-11 — des creneaux carres en
+            # zone boisee et une nuee de micro-polygones le long des lignes.
+            # La copie coute un fichier ; la recalculer couterait un second
+            # telechargement du terrain.
+            self._terrain_nu = self._garder_terrain_nu(chemin)
+            # Le dossier de travail, et non celui des telechargements : le
+            # masquage du resultat relira ces memes fichiers plus tard, et
+            # `masquage.py` les cherche a cote de la ZIV.
+            self._occultation = fournisseur.graver_occultation(
+                chemin, boite, self._epsg_travail, str(self._working_dir),
+                journal=self.logger)
+
+        self._avertir_scr_du_projet()
+        self._journaliser_provenance(resolution)
+
+        # Les dalles ne sont jamais chargees dans le projet : ce sont des
+        # intermediaires. Seul le resultat merite d'etre affiche.
+        _ = charger_couches
+        return self._finalize_result({
+            "OUTPUT_DIRECTORY": str(dossier),
+            "OUTPUT_FILE": str(chemin),
+            "OUTPUT_FILES": "",
+        })
+
+    def _livrer_dans_le_scr_du_projet(self, result_dict):
+        """Reprojette les couches produites dans le systeme du projet.
+
+        Le CALCUL reste dans le fuseau deduit de l'emprise : c'est lui qui
+        donne des distances justes, et en changer fausserait le viewshed. Seul
+        le LIVRABLE change de systeme, une fois tout calcule — les points de
+        vue et les courbes sont donc etablis sur des coordonnees exactes, puis
+        traduits.
+
+        Ce que cela supprime : l'utilisateur recevait des couches dans un
+        systeme autre que le sien, et son reflexe — leur imposer le SCR du
+        projet — les envoyait a des centaines de kilometres, dans l'ocean pour
+        une zone cotiere. Un avertissement au journal n'y suffisait pas.
+
+        Rien ici n'est bloquant. Si une reprojection echoue, la couche reste
+        dans le fuseau de calcul, ce qui est juste, et le journal le dit.
+        """
+        travail = int(getattr(self, "_epsg_travail", 0) or 0)
+        if not travail:
+            return
+        scr_projet = QgsProject.instance().crs()
+        if not scr_projet.isValid() or scr_projet.authid() == ("EPSG:%d" % travail):
+            return
+        if scr_projet.isGeographic():
+            # Reprojeter un raster metrique en degres donne des pixels qui ne
+            # sont plus carres : le viewshed cesserait d'etre lisible a la
+            # regle. On garde le fuseau et on le dit.
+            self.logger.warning(
+                "Le projet est en %s, un systeme en degres : les couches "
+                "restent en EPSG:%d pour garder des pixels carres. QGIS les "
+                "reprojette a l'affichage ; ne pas leur imposer le SCR du "
+                "projet." % (scr_projet.authid(), travail))
+            return
+
+        livrables = self._fichiers_livrables(result_dict)
+        if not livrables:
+            return
+
+        from osgeo import gdal
+
+        gdal.UseExceptions()
+        traduites, echouees = [], []
+        for couche, chemin in livrables:
+            nom, source = couche.name(), str(chemin)
+            rendu = etiquetage = None
+            with contextlib.suppress(Exception):
+                rendu = couche.renderer().clone()
+            with contextlib.suppress(Exception):
+                if couche.labelsEnabled():
+                    etiquetage = couche.labeling().clone()
+            est_raster = isinstance(couche, QgsRasterLayer)
+            try:
+                # La couche doit lacher le fichier AVANT qu'on le remplace :
+                # sous Windows un raster ouvert par QGIS reste verrouille, et
+                # `os.replace` echouerait en WinError 32.
+                QgsProject.instance().removeMapLayer(couche.id())
+                temporaire = "%s.reproj%s" % os.path.splitext(source)
+                if est_raster:
+                    # Plus proche voisin : les valeurs de la ZIV sont des
+                    # classes de visibilite, pas des mesures continues. Les
+                    # interpoler inventerait des degres qui n'existent pas.
+                    sortie = gdal.Warp(temporaire, source,
+                                       dstSRS=scr_projet.authid(),
+                                       resampleAlg="near")
+                    # `gdal.Warp` rend lui aussi un jeu de donnees OUVERT. Sans
+                    # cette fermeture, un handle reste sur le raster remplace —
+                    # et un raster a demi tenu se dessine de facon erratique.
+                    sortie = None
+                else:
+                    jeu = gdal.VectorTranslate(temporaire, source,
+                                               dstSRS=scr_projet.authid(),
+                                               reproject=True)
+                    # VectorTranslate rend un jeu de donnees OUVERT : sans
+                    # cette fermeture, le fichier reste verrouille et le
+                    # remplacement echoue sous Windows.
+                    jeu = None
+                self._remplacer_fichier_et_freres(temporaire, source)
+                traduites.append(nom)
+            except Exception as erreur:
+                echouees.append("%s (%s)" % (nom, str(erreur)[:60]))
+                with contextlib.suppress(Exception):
+                    for reste in glob.glob(
+                            "%s.*" % os.path.splitext(temporaire)[0]):
+                        os.remove(reste)
+            # Rechargee dans tous les cas : la couche a ete retiree du projet,
+            # la laisser disparaitre serait pire que de la laisser en 32617.
+            rechargee = (QgsRasterLayer(source, nom) if est_raster
+                         else QgsVectorLayer(source, nom, "ogr"))
+            if rechargee.isValid():
+                with contextlib.suppress(Exception):
+                    if rendu is not None:
+                        rechargee.setRenderer(rendu)
+                    if etiquetage is not None:
+                        rechargee.setLabeling(etiquetage)
+                        rechargee.setLabelsEnabled(True)
+                QgsProject.instance().addMapLayer(rechargee)
+            else:
+                self.logger.warning(
+                    "Couche « %s » non rechargeable apres reprojection." % nom)
+
+        if traduites:
+            self.logger.info(
+                "Couches livrees en %s, le systeme du projet : %s. Le calcul, "
+                "lui, s'est fait en EPSG:%d — le fuseau de l'emprise, qui seul "
+                "donne des distances justes."
+                % (scr_projet.authid(), ", ".join(traduites), travail))
+        if echouees:
+            self.logger.warning(
+                "Reprojection impossible pour %s : ces couches restent en "
+                "EPSG:%d. Elles sont justes ; ne pas leur imposer le SCR du "
+                "projet." % ("; ".join(echouees), travail))
+
+    @staticmethod
+    def _remplacer_fichier_et_freres(temporaire, source):
+        """Remplace `source` par `temporaire`, FRERES COMPRIS.
+
+        Un Shapefile n'est pas un fichier mais une fratrie : `.shp`, `.shx`,
+        `.dbf`, `.prj`. Ne remplacer que le `.shp` laissait le `.prj` d'origine
+        en place — la couche continuait d'annoncer l'ancien systeme tout en
+        portant des coordonnees nouvelles, ce qui est le pire des deux mondes.
+        Un GeoPackage ou un GeoTIFF n'a qu'un fichier : la meme boucle les
+        traite sans cas particulier.
+        """
+        racine_temporaire = os.path.splitext(temporaire)[0]
+        racine_source = os.path.splitext(source)[0]
+        produits = glob.glob("%s.*" % racine_temporaire)
+        if not produits:
+            raise OSError("la reprojection n'a produit aucun fichier")
+        for produit in produits:
+            os.replace(produit, racine_source + os.path.splitext(produit)[1])
+
+    def _couches_du_calcul(self, result_dict):
+        """Les couches du projet qui sortent de CE calcul, et leur fichier.
+
+        On ne touche qu'a ce que l'on vient de produire : une couche est
+        retenue si son fichier est l'un de ceux que l'on rend, ou se trouve
+        dans le dossier de travail. Les couches de l'utilisateur, elles, ne
+        sont pas notre affaire.
+        """
+        attendus = {os.path.normcase(os.path.abspath(str(v)))
+                    for v in result_dict.values()
+                    if isinstance(v, str) and v and os.path.isfile(str(v))}
+        dossier = str(getattr(self, "_working_dir", "") or "")
+        dossier = os.path.normcase(os.path.abspath(dossier)) if dossier else ""
+
+        retenues = []
+        for couche in list(QgsProject.instance().mapLayers().values()):
+            source = str(couche.source()).split("|")[0]
+            if not source or not os.path.isfile(source):
+                continue
+            absolu = os.path.normcase(os.path.abspath(source))
+            if absolu in attendus or (dossier and absolu.startswith(dossier)):
+                retenues.append((couche, source))
+        return retenues
+
+    def _fichiers_livrables(self, result_dict):
+        """Celles des couches du calcul qui sont encore dans le fuseau de
+        travail — les seules qu'il reste a traduire."""
+        travail = "EPSG:%d" % int(getattr(self, "_epsg_travail", 0) or 0)
+        return [(couche, source)
+                for couche, source in self._couches_du_calcul(result_dict)
+                if couche.crs().authid() == travail]
+
+    def _retirer_les_couches_du_calcul(self, result_dict):
+        """Retire du projet les couches produites par ce calcul. Rend leur nombre.
+
+        Appelee a l'annulation : les FICHIERS restent sur le disque — le cache
+        a ete paye, une relance doit pouvoir s'en servir — mais le projet
+        redevient ce qu'il etait. Une couche rescapee d'un calcul interrompu
+        ne se distingue en rien d'un resultat complet, une fois affichee.
+        """
+        retirees = 0
+        try:
+            for couche, _source in self._couches_du_calcul(result_dict):
+                QgsProject.instance().removeMapLayer(couche.id())
+                retirees += 1
+        except Exception as erreur:
+            self.logger.warning(
+                "Couches non retirees apres annulation (%s)." % erreur)
+        return retirees
+
+    def _ordonner_les_couches(self, result_dict):
+        """Remet les couches produites dans l'ordre ou on les lit.
+
+        Points, puis lignes, puis polygones, puis rasters : l'ordre
+        cartographique usuel, ou ce qui est le plus fin passe au-dessus de ce
+        qui est le plus large. En pratique le rayon d'analyse doit se voir
+        PAR-DESSUS la ZIV — un contour de 300 m masque par un raster ne sert a
+        rien — et c'est ce qu'un utilisateur a demande le 2026-09-14.
+
+        Le faire explicitement, et non en comptant sur l'ordre d'ajout : la
+        traduction des couches dans le systeme du projet (1.5.0) les retire et
+        les recharge, donc l'ordre d'arrivee ne veut plus rien dire.
+        """
+        try:
+            racine = QgsProject.instance().layerTreeRoot()
+
+            def _rang(couche):
+                if isinstance(couche, QgsRasterLayer):
+                    return 3
+                try:
+                    # 0 point, 1 ligne, 2 polygone — meme numerotation en Qt5
+                    # et en Qt6, seule la maison de l'enum a change.
+                    return {0: 0, 1: 1, 2: 2}.get(int(couche.geometryType()), 2)
+                except Exception:
+                    return 2
+
+            couches = [c for c, _s in self._couches_du_calcul(result_dict)]
+            if len(couches) < 2:
+                return
+            # Du bas vers le haut : chaque insertion en tete repousse la
+            # precedente d'un cran, donc on pose le raster d'abord.
+            for couche in sorted(couches, key=_rang, reverse=True):
+                noeud = racine.findLayer(couche.id())
+                if noeud is None:
+                    continue
+                copie = noeud.clone()
+                racine.insertChildNode(0, copie)
+                racine.removeChildNode(noeud)
+        except Exception as erreur:
+            # Un ordre de legende ne justifie pas de faire echouer un calcul.
+            self.logger.warning(
+                "Ordre des couches non applique (%s)." % erreur)
+
+    def _habiller_courbes(self, couche):
+        """Trait fin brun, et l'altitude ecrite le long de la ligne.
+
+        Sans etiquette, une courbe de niveau ne dit pas dans quel sens le
+        terrain monte : c'est le chiffre qui la rend lisible, pas le trait.
+
+        Les enums de placement ont change de maison entre Qt5 et Qt6 — d'ou
+        l'acces tolerant : `Qgis.LabelPlacement` d'abord, present depuis 3.26
+        et sur les deux cibles du greffon, l'ancien attribut de classe ensuite,
+        et le defaut de QGIS si les deux manquent. Le style, lui, passe par
+        `createSimple` et ses chaines, qui n'ont jamais bouge.
+        """
+        try:
+            from qgis.core import (QgsLineSymbol, QgsPalLayerSettings,
+                                   QgsTextFormat, QgsVectorLayerSimpleLabeling)
+
+            symbole = QgsLineSymbol.createSimple({
+                "color": "150,90,50,255",
+                "width": "0.25",
+            })
+            couche.renderer().setSymbol(symbole)
+
+            reglages = QgsPalLayerSettings()
+            reglages.fieldName = "altitude"
+            # Un chiffre par ligne suffit ; repete tous les 60 mm de trace, il
+            # reste lisible sans transformer la carte en liste de nombres.
+            reglages.repeatDistance = 60.0
+
+            placement, millimetre = None, None
+            try:
+                from qgis.core import Qgis
+                placement = Qgis.LabelPlacement.Line
+                millimetre = Qgis.RenderUnit.Millimeters
+            except Exception:
+                placement = getattr(QgsPalLayerSettings, "Line", None)
+                try:
+                    from qgis.core import QgsUnitTypes
+                    millimetre = QgsUnitTypes.RenderMillimeters
+                except Exception:
+                    millimetre = None
+            if placement is not None:
+                reglages.placement = placement
+            if millimetre is not None:
+                reglages.repeatDistanceUnit = millimetre
+
+            format_texte = QgsTextFormat()
+            format_texte.setSize(7.0)
+            reglages.setFormat(format_texte)
+
+            couche.setLabeling(QgsVectorLayerSimpleLabeling(reglages))
+            couche.setLabelsEnabled(True)
+            couche.triggerRepaint()
+        except Exception as erreur:
+            # Une couche sans habillage reste une couche juste.
+            self.logger.warning(
+                "Courbes de niveau : habillage non applique (%s)." % erreur)
+
+    def _mnt_pour_les_courbes(self, aoi_geometry, dalles_choisies, dossier,
+                              type_donnee):
+        """Le MNT des memes dalles, pour en tirer les courbes de niveau.
+
+        Rend le chemin d'une mosaique de TERRAIN, ou "" s'il n'y a rien a
+        faire ou si quoi que ce soit echoue — les courbes retombent alors sur
+        le produit de travail, en le DISANT au journal.
+
+        Trois faits mesures le 2026-09-14 sur le service de l'IGN, et qui
+        rendent l'operation peu couteuse :
+
+          * la decouverte est la MEME requete WFS pour les quatre produits,
+            une seule couche les servant tous : demander le MNT ne coute pas
+            une recherche de plus, seulement la lecture d'une autre propriete ;
+          * les trois produits couvrent les memes dalles — MNT, MNS et MNH
+            rendus tous les trois sur l'emprise d'essai ;
+          * le nom de dalle est prefixe par le produit (`mnt_1050-6846` contre
+            `mns_1050-6846`), donc les deux cohabitent au cache sans que l'un
+            se relise pour l'autre. C'est ce prefixe, pose en 1.1.0, qui rend
+            ce correctif sur.
+
+        On ne rejoue PAS la selection geometrique : les dalles MNT portent le
+        meme identifiant que celles deja retenues, au prefixe pres. Filtrer
+        sur cet identifiant donne exactement la meme emprise, sans dupliquer
+        une logique de selection qui vit ailleurs.
+        """
+        if not getattr(self, "_courbes_demandees", False):
+            return ""
+        resolution = max(self.ZIV_TARGET_RES_M, self.RESOLUTION_COURBES)
+        # Le produit demande EST le terrain, et il est deja assez grossier :
+        # le fichier de travail fait l'affaire, rien a telecharger. On le
+        # SIGNALE, faute de quoi `_produire_courbes` croirait travailler sur
+        # une surface et avertirait a tort.
+        if type_donnee == 0 and self.ZIV_TARGET_RES_M >= self.RESOLUTION_COURBES:
+            self._courbes_sur_le_terrain = True
+            return ""
+
+        try:
+            # `import_dalles` designe l'ADAPTATEUR, lie au niveau module
+            # (`from .import_dalles import adaptateur as import_dalles`). Un
+            # `from . import import_dalles` local pointerait le PAQUET et le
+            # masquerait : meme nom, autre objet.
+            identifiants = {str(d.get("name", "")).split("_", 1)[-1]
+                            for d in dalles_choisies if d.get("name")}
+            if not identifiants:
+                return ""
+
+            bbox = aoi_geometry.boundingBox()
+            emprise = (bbox.xMinimum(), bbox.yMinimum(),
+                       bbox.xMaximum(), bbox.yMaximum())
+            toutes = import_dalles.dalles_geoplateforme(
+                emprise, "url_mnt", journal=self.logger)
+            dalles_mnt = [d for d in toutes
+                          if str(d.get("name", "")).split("_", 1)[-1] in identifiants]
+            if not dalles_mnt:
+                self.logger.warning(
+                    "Courbes de niveau : aucune dalle MNT sur l'emprise alors "
+                    "que %d dalle(s) du produit de travail y sont. Les courbes "
+                    "suivront la surface." % len(identifiants))
+                return ""
+            if len(dalles_mnt) < len(identifiants):
+                # Dit, et non tu : une couverture partielle troue le terrain,
+                # et un trou de terrain se lit comme un replat sur la carte.
+                self.logger.warning(
+                    "Courbes de niveau : seulement %d dalle(s) MNT pour %d "
+                    "dalle(s) de travail — le terrain sera incomplet sur les "
+                    "bords." % (len(dalles_mnt), len(identifiants)))
+
+            # Un dossier a part : `importer_raster` nomme sa mosaique a la
+            # SECONDE (`merged_output_<horodatage>.tif`), et deux appels dans
+            # la meme seconde se marcheraient dessus.
+            dossier_mnt = Path(str(dossier)) / "mnt_courbes"
+            dossier_mnt.mkdir(parents=True, exist_ok=True)
+            # Une courbe de niveau ne gagne rien a la finesse de la ZIV : au
+            # metre, le MNT porte encore le micro-relief — sillons, talus de
+            # bord de champ — et le trace se fragmente. Mesure du 2026-09-14 :
+            # a 2 m, 4 744 troncons engendres dont 3 111 ecartes comme
+            # coquilles. On demande donc le terrain a RESOLUTION_COURBES au
+            # plus fin, ce qui allege aussi le telechargement d'un facteur 24
+            # (978 Ko contre 40 Ko par dalle). Le cache distingue bien les deux
+            # resolutions : le nom de fichier les porte (`..._2m.tif`).
+            resultat = import_dalles.importer_raster(
+                self, dalles_mnt, str(dossier_mnt), 0, resolution,
+                fusionner=True, charger_couches=False)
+            chemin = str(resultat.get("OUTPUT_FILE") or "")
+            if not chemin or not os.path.isfile(chemin):
+                return ""
+            # Volontairement PAS dans `_temp_files` : GDAL tient encore le
+            # fichier quand le nettoyage passe, et l'echec de suppression
+            # produisait un avertissement pour rien. Le terrain reste donc a
+            # cote de la ZIV, comme il le fait deja cote americain.
+            self.logger.info(
+                "Courbes de niveau : MNT telecharge a part sur %d dalle(s) a "
+                "%g m — les isolignes decriront le relief nu, pas la canopee."
+                % (len(dalles_mnt), resolution))
+            return chemin
+        except Exception as erreur:
+            self.logger.warning(
+                "Courbes de niveau : MNT indisponible (%s). Elles seront "
+                "tirees du produit de travail et suivront donc la vegetation "
+                "et le bati." % erreur)
+            return ""
+
+    def _garder_terrain_nu(self, chemin_terrain):
+        """Met le terrain de cote AVANT que la surface occultante ne l'ecrase.
+
+        Rend le chemin de la copie, ou "" si elle a echoue — auquel cas les
+        courbes retomberont sur la surface, avec un mot au journal. Une couche
+        d'agrement ne justifie pas de faire echouer un calcul.
+
+        La copie est RAMENEE a `RESOLUTION_COURBES` quand le terrain est plus
+        fin, pour la meme raison qu'en France : une courbe de niveau se lit a
+        l'echelle d'une carte topographique, et au metre le terrain porte
+        encore le micro-relief agricole. Mesure du 2026-09-14 sur une plaine
+        de l'Illinois, equidistance automatique de 2 m : 2 378 troncons
+        engendres a 2 m contre 871 a 10 m, soit 819 livres contre 333. Sur un
+        relief marque l'ecart est mince (81 contre 47 a Asheville) — c'est en
+        terrain plat que la finesse se paie. Aucun reseau ici : le terrain est
+        deja sur le disque, on le reechantillonne.
+        """
+        try:
+            from osgeo import gdal
+
+            gdal.UseExceptions()
+            source = Path(str(chemin_terrain))
+            copie = source.with_name("%s_nu%s" % (source.stem, source.suffix))
+            jeu = gdal.Open(str(source))
+            pixel = abs(jeu.GetGeoTransform()[1]) if jeu is not None else 0.0
+            jeu = None
+            if pixel and pixel < self.RESOLUTION_COURBES:
+                # `average` et non le plus proche voisin : on veut lisser le
+                # micro-relief, pas en echantillonner un point sur cinq.
+                sortie = gdal.Warp(
+                    str(copie), str(source),
+                    xRes=self.RESOLUTION_COURBES, yRes=self.RESOLUTION_COURBES,
+                    resampleAlg="average")
+                # `gdal.Warp` rend un jeu de donnees OUVERT : sans cette
+                # fermeture le fichier reste verrouille sous Windows.
+                sortie = None
+            else:
+                shutil.copyfile(str(source), str(copie))
+            # Un Path, pas une chaine : `_cleanup_temp_files` appelle
+            # `.exists()` sur ce qu'il trouve, et une chaine le faisait echouer
+            # a chaque passage — « Failed to cleanup temp file », pour rien.
+            self._temp_files.add(copie)
+            return str(copie)
+        except Exception as erreur:
+            self.logger.warning(
+                "Terrain nu non conserve (%s) : les courbes de niveau suivront "
+                "la surface occultante, donc la canopee." % erreur)
+            return ""
+
+    def _avertir_scr_du_projet(self):
+        """Dire que les couches ne sortiront pas dans le SCR du projet.
+
+        Le fuseau de travail se deduit de l'emprise, pas du projet : c'est ce
+        qui garantit des distances justes. Mais l'utilisateur, lui, voit
+        arriver des couches dans un autre systeme que le sien — et son
+        reflexe, leur imposer le SCR du projet, les envoie a des centaines de
+        kilometres. Signale le 2026-09-11 : projet en UTM 18N, zone en 17N,
+        ZIV « dans l'ocean » apres correction manuelle du SCR.
+        """
+        try:
+            travail = int(getattr(self, "_epsg_travail", 0) or 0)
+            if not travail:
+                return
+            scr_projet = QgsProject.instance().crs()
+            if not scr_projet.isValid():
+                return
+            code = scr_projet.authid()
+            if code == ("EPSG:%d" % travail):
+                return
+            self.logger.warning(
+                "Le calcul se fait en EPSG:%d, deduit de l'emprise, alors que "
+                "le projet est en %s. Les couches produites porteront "
+                "EPSG:%d : QGIS les reprojette a l'affichage, il ne faut PAS "
+                "leur imposer le SCR du projet — elles se retrouveraient a "
+                "des centaines de kilometres." % (travail, code, travail))
+        except Exception:
+            # Un avertissement de confort ne fait echouer aucun calcul.
+            pass
+
+    def _journaliser_provenance(self, resolution):
+        """Écrit au journal SUR QUOI le résultat repose, en clair.
+
+        Le greffon n'a plus de mise en page cartographique depuis la 1.5.x : le
+        journal est donc le seul endroit où la provenance est consignée — et
+        `journal_ziv.py` l'écrit aussi dans un fichier daté sur le disque, qui
+        peut être joint en annexe d'une étude.
+
+        Ce bloc existe pour une raison précise. Deux ZIV d'apparence identique
+        peuvent reposer sur des terrains dix fois différents en finesse, et sur
+        un bâti dont la hauteur est mesurée ou seulement supposée. Ne pas le
+        dire serait la dégradation silencieuse que `tasks/lessons.md` documente
+        sous toutes ses formes.
+        """
+        stats = getattr(self, "_occultation", None) or {}
+        fournisseur = getattr(self, "_fournisseur", None)
+        lignes = [
+            "----- Provenance du résultat -----",
+            "Fournisseur      : %s" % (fournisseur.NOM if fournisseur else "?"),
+            "Système de calcul: EPSG:%d" % getattr(self, "_epsg_travail", 0),
+        ]
+
+        # Une resolution de travail plus grossiere que celle demandee signifie
+        # que le service ne possedait pas plus fin : c'est le mode replie.
+        if resolution > self.ZIV_TARGET_RES_M + 1e-6:
+            lignes.append(
+                "Terrain          : %g m — le LiDAR fin NE COUVRE PAS cette "
+                "emprise, le relief est lissé et les talus de moins de %g m "
+                "disparaissent. ZIV indicative." % (resolution, resolution))
+        else:
+            lignes.append("Terrain          : %g m" % resolution)
+
+        provenance = stats.get("provenance") or {}
+        total = sum(v for c, v in provenance.items() if c != "sans_occultation")
+        if provenance and total:
+            part = lambda cle: 100.0 * provenance.get(cle, 0) / total  # noqa: E731
+            forfaits = sum(v for c, v in provenance.items()
+                           if c.startswith("forfait"))
+            lignes.append(
+                "Végétation       : LANDFIRE 30 m — %.0f %% de hauteur EVH "
+                "directe, %.0f %% comblés par le CH, %.0f %% au forfait ; "
+                "jusqu'à %.1f m."
+                % (part("evh"), part("ch"), 100.0 * forfaits / total,
+                   stats.get("occultation_max", 0.0)))
+        else:
+            lignes.append(
+                "Végétation       : ABSENTE — la canopée n'occulte pas, "
+                "la visibilité est SURÉVALUÉE.")
+
+        bati = stats.get("bati")
+        if bati:
+            lignes.append(
+                "Bâti             : %d bâtiment(s), %.0f %% à hauteur mesurée, "
+                "%.0f %% au forfait de classe ; moyenne %.1f m."
+                % (bati["ecrites"], bati["part_mesuree"],
+                   100.0 - bati["part_mesuree"], bati["hauteur_moyenne"]))
+            if bati.get("tronque"):
+                lignes.append(
+                    "                   /!\\ garde-fou de volume atteint : le "
+                    "bâti est TRONQUÉ sur cette emprise.")
+        else:
+            lignes.append(
+                "Bâti             : ABSENT — les toitures n'occultent pas.")
+
+        for ligne in lignes:
+            self.logger.info(ligne)
+
     def _finalize_result(self, result_dict: dict) -> dict:
         # Persist the tile manifest as the very first thing - even if the
         # ZIV step fails later, the tiles we've downloaded are still
@@ -1226,6 +2339,23 @@ Créer la ZIV :
            basemap shows through instead of the grey DEM
         4. Load the analysis buffer LAST so it sits on top of all layers
         """
+        # ---- 0) Annulation : on s'arrete AVANT de produire quoi que ce soit --
+        # Les gardes posees plus haut arretent bien les telechargements, mais
+        # la chaine continuait jusqu'ici et fabriquait la ZIV, le rayon
+        # d'analyse et les courbes de niveau — sur un terrain incomplet, et
+        # sans que rien ne le dise. Un utilisateur l'a rapporte le 2026-09-14.
+        # Une ZIV partielle ne se distingue pas d'une ZIV complete sur une
+        # carte : mieux vaut ne rien rendre du tout.
+        # Le dossier de travail est tout de meme nomme, pour que les dalles
+        # deja telechargees restent trouvables — relancer ne doit pas tout
+        # recommencer.
+        if self.feedback.isCanceled():
+            self.logger.info(
+                "Annulation demandee : ni ZIV, ni rayon d'analyse, ni courbes "
+                "de niveau ne sont produits. Les dalles deja telechargees "
+                "restent en cache pour une prochaine execution.")
+            return {"OUTPUT_DIRECTORY": result_dict.get("OUTPUT_DIRECTORY", "")}
+
         ziv_path = ""
         dem_layer_id = None  # kept for symmetry, never populated since v2.1.6
         dem_path = result_dict.get("OUTPUT_FILE", "")
@@ -1287,6 +2417,21 @@ Créer la ZIV :
                     f"Could not hide merged DEM layer: {hide_err}"
                 )
 
+        # Seconde garde : la ZIV est le poste long de la chaine, et c'est
+        # pendant elle qu'on annule le plus souvent. Tout ce qui suit — rayon,
+        # points de vue, courbes — decrit un resultat qui n'existe pas.
+        # La ZIV, elle, a pu etre CHARGEE avant qu'on arrive ici : on la
+        # retire, sinon une couche rescapee d'un calcul annule resterait au
+        # projet sans que rien ne la distingue d'un resultat complet.
+        if self.feedback.isCanceled():
+            retirees = self._retirer_les_couches_du_calcul(result_dict)
+            self.logger.info(
+                "Annulation demandee pendant le calcul de la ZIV : ni rayon "
+                "d'analyse, ni points de vue, ni courbes de niveau%s."
+                % (", et %d couche(s) deja chargee(s) retiree(s)" % retirees
+                   if retirees else ""))
+            return {"OUTPUT_DIRECTORY": result_dict.get("OUTPUT_DIRECTORY", "")}
+
         # ---- 3) Buffer layer LAST (so it appears on top) ----
         buffer_layer = None
         buffer_shp = getattr(self, "_buffer_shp_path", "")
@@ -1318,7 +2463,173 @@ Créer la ZIV :
         if ziv_path:
             self._generate_photo_viewpoints(ziv_path)
 
+        # ---- 3ter) Courbes de niveau, si demandees ----
+        # Croisees avec la ZIV, elles disent POURQUOI une zone voit ou ne voit
+        # pas : sur un terrain plat, une ondulation d'un metre suffit a tout
+        # decider, et sans courbes le resultat semble arbitraire.
+        if getattr(self, "_courbes_demandees", False) and dem_path:
+            chemin = self._produire_courbes(dem_path)
+            if chemin:
+                result_dict["COURBES_NIVEAU"] = chemin
+
+        # ---- 4) Les livrables passent dans le systeme du projet -------------
+        # En DERNIER, et pas avant : points de vue et courbes viennent d'etre
+        # etablis sur les coordonnees du fuseau de calcul, qui sont les justes.
+        self._livrer_dans_le_scr_du_projet(result_dict)
+
+        # ---- 5) Et l'ordre de la legende, une fois tout en place ------------
+        self._ordonner_les_couches(result_dict)
+
         return result_dict
+
+    @staticmethod
+    def _equidistance(amplitude):
+        """Un beau nombre visant une quinzaine de courbes sur l'emprise.
+
+        Une equidistance fixe ne convient pas : 5 m donnerait deux courbes sur
+        une plaine et un plat de spaghettis en montagne. On vise 15 courbes,
+        puis on arrondit au pas cartographique le plus proche par en dessous.
+        """
+        if not amplitude or amplitude <= 0:
+            return 0.0
+        PAS = (0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 25.0, 50.0, 100.0, 200.0)
+        vise = amplitude / 15.0
+        retenus = [p for p in PAS if p <= vise]
+        if retenus:
+            return retenus[-1]
+        # Sous le plus petit pas cartographique, il n y a pas de courbe a
+        # tracer : le dire vaut mieux que livrer un fichier vide.
+        return PAS[0] if amplitude >= PAS[0] else 0.0
+
+    def _produire_courbes(self, dem_path):
+        """Ecrit les courbes de niveau du TERRAIN et les charge. Best-effort.
+
+        Rien ici n'est bloquant : une ZIV sans courbes reste exploitable, une
+        execution avortee pour une couche d'agrement ne le serait pas.
+
+        Sur QUOI elles sont tirees decide de tout. Une courbe de niveau decrit
+        le RELIEF ; la tirer d'une surface qui porte la canopee et les toits
+        donne les creneaux carres et la nuee de micro-polygones rapportes le
+        2026-09-11 — aux Etats-Unis la surface vegetale vient de LANDFIRE, dont
+        la maille de 30 m se lit directement dans le dessin des lignes. On
+        prefere donc le terrain nu mis de cote avant la gravure, et on DIT au
+        journal sur quoi on a travaille quand ce n'est pas lui.
+        """
+        try:
+            import numpy as np
+            from osgeo import gdal, ogr, osr
+
+            gdal.UseExceptions()
+            terrain_nu = getattr(self, "_terrain_nu", "") or ""
+            if terrain_nu and os.path.isfile(terrain_nu):
+                base, origine = terrain_nu, "le terrain nu"
+            elif getattr(self, "_courbes_sur_le_terrain", False):
+                # Le produit de travail EST un terrain : rien a telecharger,
+                # et surtout rien a signaler — avertir ici reviendrait a
+                # accuser de canopee un fichier qui n'en porte pas.
+                base = str(dem_path)
+                origine = "le terrain demande au formulaire"
+            else:
+                base = str(dem_path)
+                origine = ("la surface de travail (relief + ce que le produit "
+                           "choisi contient : canopee, toitures)")
+                self.logger.warning(
+                    "Courbes de niveau tirees de %s, faute de terrain nu : "
+                    "elles suivront la vegetation et le bati. Pour un trace "
+                    "franc, demander le MNT comme type de donnees." % origine)
+
+            jeu = gdal.Open(str(base))
+            if jeu is None:
+                self.logger.warning("Courbes de niveau : terrain illisible.")
+                return ""
+            bande = jeu.GetRasterBand(1)
+            valeurs = bande.ReadAsArray().astype("float64")
+            sans_donnee = bande.GetNoDataValue()
+            if sans_donnee is not None:
+                valeurs[valeurs == sans_donnee] = np.nan
+            finies = valeurs[np.isfinite(valeurs)]
+            if finies.size == 0:
+                self.logger.warning("Courbes de niveau : terrain sans altitude.")
+                return ""
+            bas, haut = float(finies.min()), float(finies.max())
+            pas = self._equidistance(haut - bas)
+            if pas <= 0:
+                self.logger.warning(
+                    "Courbes de niveau : terrain trop plat (%.2f m d'amplitude)."
+                    % (haut - bas))
+                return ""
+
+            dossier = Path(str(getattr(self, "_working_dir", "") or ""))
+            if not str(dossier) or not dossier.exists():
+                dossier = Path(dem_path).parent
+            horodatage = datetime.now().strftime("%Y%m%d_%H%M%S")
+            chemin = dossier / ("courbes_niveau_%gm_%s.gpkg" % (pas, horodatage))
+
+            reference = osr.SpatialReference()
+            reference.ImportFromWkt(jeu.GetProjection())
+
+            # On genere d'abord EN MEMOIRE : le tri des coquilles se fait ainsi
+            # a l'ecriture, sans supprimer d'entites dans le fichier livre.
+            brouillon = ogr.GetDriverByName("Memory").CreateDataSource("courbes")
+            provisoire = brouillon.CreateLayer("courbes", reference,
+                                               ogr.wkbLineString)
+            provisoire.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
+            provisoire.CreateField(ogr.FieldDefn("altitude", ogr.OFTReal))
+            gdal.ContourGenerate(bande, pas, 0.0, [], 1 if sans_donnee is not None
+                                 else 0, sans_donnee or 0.0, provisoire, 0, 1)
+            engendrees = provisoire.GetFeatureCount()
+
+            # Le seuil des « coquilles » : ces boucles de quelques pixels qui
+            # naissent du bruit du raster et encombrent le dessin sans rien
+            # dire du relief. Il est exprime en PIXELS, seule echelle ou il
+            # garde un sens d'une resolution a l'autre : en dessous de dix
+            # cotes de cellule, un contour ne decrit plus une forme du terrain.
+            pixel = abs(jeu.GetGeoTransform()[1]) or 1.0
+            seuil = 10.0 * pixel
+
+            pilote = ogr.GetDriverByName("GPKG")
+            source = pilote.CreateDataSource(str(chemin))
+            couche = source.CreateLayer("courbes", reference, ogr.wkbLineString)
+            couche.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
+            couche.CreateField(ogr.FieldDefn("altitude", ogr.OFTReal))
+            definition = couche.GetLayerDefn()
+            nombre = 0
+            provisoire.ResetReading()
+            for entite in provisoire:
+                geometrie = entite.GetGeometryRef()
+                if geometrie is None or geometrie.Length() < seuil:
+                    continue
+                gardee = ogr.Feature(definition)
+                gardee.SetGeometry(geometrie.Clone())
+                gardee.SetField("id", nombre)
+                gardee.SetField("altitude", entite.GetField("altitude"))
+                couche.CreateFeature(gardee)
+                gardee = None
+                nombre += 1
+            provisoire = None
+            brouillon = None
+            couche = None
+            source = None
+            jeu = None
+
+            self.logger.info(
+                "Courbes de niveau : %d courbe(s) tous les %g m sur %s "
+                "(amplitude %.1f m), %d coquille(s) de moins de %.0f m "
+                "ecartee(s) -> %s"
+                % (nombre, pas, origine, haut - bas, engendrees - nombre,
+                   seuil, chemin.name))
+
+            couche_qgis = QgsVectorLayer(str(chemin), "Courbes de niveau (%g m)"
+                                         % pas, "ogr")
+            if couche_qgis.isValid():
+                self._habiller_courbes(couche_qgis)
+                QgsProject.instance().addMapLayer(couche_qgis)
+            else:
+                self.logger.warning("Courbes de niveau : couche non chargeable.")
+            return str(chemin)
+        except Exception as erreur:
+            self.logger.warning("Courbes de niveau : echec (%s)." % erreur)
+            return ""
 
     def _downsample_dem(
         self, input_path: str, downloads_dir: Path
@@ -1404,7 +2715,19 @@ Créer la ZIV :
 
         Meilleur effort : hors couverture, WFS indisponible ou erreur GDAL, on
         prévient et la ZIV est rendue telle quelle.
+
+        Deux natures de masque, et c'est assumé. La France masque par des
+        empreintes **vectorielles** (BD Forêt, BDTOPO) ; les États-Unis par un
+        **seuil sur le raster** de hauteur déjà rapatrié pour l'occultation, ce
+        qui évite de vectoriser un raster pour rien et garantit par
+        construction que surface et masque ne se contredisent pas en lisière.
         """
+        fournisseur = getattr(self, "_fournisseur", None)
+        if fournisseur is not None and fournisseur.occulte():
+            return fournisseur.masquer_resultat(
+                ziv_path, requested_output,
+                str(getattr(self, "_working_dir", "")), journal=self.logger)
+
         from . import masquage
 
         return masquage.masquer_foret_et_bati(
@@ -1485,22 +2808,44 @@ Créer la ZIV :
                 work_dir = Path(ziv_path).parent
 
             # ---- Candidate mask: roads + buffered buildings ----------
+            # Hors de France, routes et bati viennent du fournisseur : TIGER/Line
+            # du Census et USA Structures. Le WFS de la Geoplateforme ne rendrait
+            # rien sur une emprise americaine.
+            fournisseur = getattr(self, "_fournisseur", None)
+            par_fournisseur = fournisseur is not None and fournisseur.occulte()
+
             cand_sources = []
             roads_geojson = work_dir / "_pv_routes.geojson"
-            if donnees_ign.telecharger_couche(
-                extent, donnees_ign.COUCHE_ROUTES, roads_geojson, self.logger
-            ):
+            if par_fournisseur:
+                routes_obtenues = fournisseur.routes(
+                    (extent.xMinimum(), extent.yMinimum(),
+                     extent.xMaximum(), extent.yMaximum()),
+                    getattr(self, "_epsg_travail", 2154),
+                    roads_geojson, journal=self.logger)
+            else:
+                routes_obtenues = donnees_ign.telecharger_couche(
+                    extent, donnees_ign.COUCHE_ROUTES, roads_geojson, self.logger
+                )
+            if routes_obtenues:
                 cand_sources.append(str(roads_geojson))
             # Buildings: reuse the footprints already downloaded by the
             # landcover masking step when present, else download.
             bati_geojson = Path(ziv_path).parent / "_ziv_mask_batiments.geojson"
             if not bati_geojson.exists():
-                bati_geojson = work_dir / "_pv_batiments.geojson"
-                if not donnees_ign.telecharger_couche(
-                    extent, donnees_ign.COUCHE_BATIMENTS, bati_geojson,
-                    self.logger,
-                ):
-                    bati_geojson = None
+                if par_fournisseur:
+                    # Le fournisseur a ecrit le bati dans le dossier de travail,
+                    # sous ce meme nom. S'il n'y est pas, l'occultation a echoue :
+                    # on s'en passe plutot que d'interroger un service qui ne
+                    # couvre pas ce pays.
+                    candidat = work_dir / "_ziv_mask_batiments.geojson"
+                    bati_geojson = candidat if candidat.exists() else None
+                else:
+                    bati_geojson = work_dir / "_pv_batiments.geojson"
+                    if not donnees_ign.telecharger_couche(
+                        extent, donnees_ign.COUCHE_BATIMENTS, bati_geojson,
+                        self.logger,
+                    ):
+                        bati_geojson = None
             if bati_geojson is not None and bati_geojson.exists():
                 buf_path = work_dir / "_pv_batiments_buffer.geojson"
                 if self._buffer_vector_ogr(bati_geojson, buf_path, 50.0):
@@ -1573,10 +2918,14 @@ Créer la ZIV :
                 try:
                     import json as _json
 
+                    # Le membre `crs` est indispensable : sans lui OGR lit ce
+                    # GeoJSON en EPSG:4326 et la rasterisation ne touche AUCUNE
+                    # cellule, tout en rendant True.
                     gj = {
                         "type": "FeatureCollection",
                         "crs": {"type": "name", "properties": {
-                            "name": "urn:ogc:def:crs:EPSG::2154"}},
+                            "name": "urn:ogc:def:crs:EPSG::%d"
+                                    % getattr(self, "_epsg_travail", 2154)}},
                         "features": [{"type": "Feature", "properties": {},
                                       "geometry": _json.loads(geom.asJson())}],
                     }
@@ -1733,7 +3082,8 @@ Créer la ZIV :
                 feats.append((gx, gy, int(round(val)), dist, azim, cat))
 
             # ---- Write the Shapefile ---------------------------------
-            crs = QgsCoordinateReferenceSystem("EPSG:2154")
+            crs = QgsCoordinateReferenceSystem(
+                "EPSG:%d" % getattr(self, "_epsg_travail", 2154))
             fields = QgsFields()
             fields.append(QgsField("id", QVariant.Int))
             fields.append(QgsField("visib", QVariant.Int))
@@ -2226,7 +3576,8 @@ Créer la ZIV :
     ) -> List[dict]:
         """Découverte des dalles — déléguée au moteur d'import embarqué.
 
-        L'AOI est déjà reprojetée en EPSG:2154 par processAlgorithm. Le contrat
+        L'AOI est déjà reprojetée dans le SCR de travail par processAlgorithm —
+        Lambert-93 en France, UTM aux États-Unis. Le contrat
         de sortie est inchangé (`url` / `name` / `geometry` / `properties`), et
         l'erreur reste non bloquante : une liste vide, et le motif au journal.
         """
@@ -2324,15 +3675,25 @@ Créer la ZIV :
 
             # Get and validate parameters
             source = self.parameterAsSource(parameters, self.INPUT, context)
-            data_type = self.parameterAsEnum(parameters, self.DATA_TYPE, context)
-            force_download = self.parameterAsBool(
-                parameters, self.FORCE_DOWNLOAD, context
+            # Lu ICI, bien avant `_choisir_fournisseur` : c'est cette valeur qui
+            # decide si la detection s'applique ou si elle est outrepassee.
+            indice_pays = self.parameterAsEnum(parameters, self.PAYS, context)
+            self._pays_impose = (
+                self.PAYS_IDS[indice_pays]
+                if 0 <= indice_pays < len(self.PAYS_IDS) else None
             )
+            data_type = self.parameterAsEnum(parameters, self.DATA_TYPE, context)
             load_layer = self.parameterAsBool(parameters, self.LOAD_LAYER, context)
             merge_tiles_flag = self.parameterAsBool(
                 parameters, self.MERGE_TILES, context
             )
-            create_ziv = self.parameterAsBool(parameters, self.CREATE_ZIV, context)
+            # La ZIV est la raison d'etre du greffon : elle n'est plus
+            # optionnelle.
+            create_ziv = True
+            self._courbes_demandees = self.parameterAsBool(
+                parameters, self.COURBES_NIVEAU, context)
+            self.logger.info("Resolution de travail de la ZIV : %g m"
+                             % self.ZIV_TARGET_RES_M)
             ziv_radius = self.parameterAsDouble(parameters, self.ZIV_RADIUS, context)
             ziv_panel_height = self.parameterAsDouble(
                 parameters, self.ZIV_PANEL_HEIGHT, context
@@ -2374,7 +3735,10 @@ Créer la ZIV :
             buffer_distance = ziv_radius
 
             # Merge strategy is now driven only by the checkbox (no enum exposed)
-            merge_strategy = 1 if (merge_tiles_flag or create_ziv) else 0
+            # La case le decide seule. Y ajouter `create_ziv`, devenu
+            # toujours vrai depuis que la ZIV n'est plus optionnelle, rendait
+            # la case inoperante et le journal menteur.
+            merge_strategy = 1 if merge_tiles_flag else 0
 
             # No concurrency limit exposed to the user - cap to a sane value to
             # avoid creating thousands of threads on huge tile sets.
@@ -2423,6 +3787,8 @@ Créer la ZIV :
             # FeatureSourceDefinition wrapping introduced regressions on
             # some QGIS versions and was reverted in v2.1.1.
             self._ziv_zip_source = parameters.get(self.INPUT)
+            # Retenu pour resoudre la ZIP en couche au moment du calage.
+            self._contexte_processing = context
             # Also resolve the ZIP as a concrete layer (for the map legend
             # "ZIP / ZE - zone d'étude" entry). None if the input is not a
             # resolvable project layer.
@@ -2448,7 +3814,6 @@ Créer la ZIV :
                 self.logger.info(
                     "  (no output path supplied - using a temporary directory)"
                 )
-            self.logger.info(f"- Force download: {force_download}")
             self.logger.info(
                 f"- Merge tiles: {'yes' if merge_strategy == 1 else 'no'}"
             )
@@ -2494,14 +3859,27 @@ Créer la ZIV :
                 aoi_geometry = features[0].geometry()
             source_crs = source.sourceCrs()
 
-            # Transform to Lambert-93 if needed
-            if source_crs.authid() != "EPSG:2154":
+            # ---- Choix du pays ---------------------------------------
+            # ICI et pas ailleurs : c'est le DERNIER instant ou l'emprise est
+            # encore dans son systeme d'origine, et le premier ou l'on connait
+            # a la fois la geometrie et ce systeme. Deux lignes plus bas,
+            # `transform()` mute la geometrie EN PLACE et l'emprise en degres
+            # n'est plus reconstituable.
+            #
+            # Le centroide est calcule sur une COPIE, pour la meme raison.
+            self._choisir_fournisseur(aoi_geometry, source_crs)
+            scr_travail = QgsCoordinateReferenceSystem(
+                "EPSG:%d" % self._epsg_travail)
+
+            # Transform to the provider's working CRS if needed
+            if source_crs.authid() != scr_travail.authid():
                 self.logger.info(
-                    f"Transforming geometry from {source_crs.authid()} to EPSG:2154"
+                    f"Transforming geometry from {source_crs.authid()} "
+                    f"to {scr_travail.authid()}"
                 )
                 transform = QgsCoordinateTransform(
                     source_crs,
-                    QgsCoordinateReferenceSystem("EPSG:2154"),
+                    scr_travail,
                     QgsProject.instance(),
                 )
                 aoi_geometry.transform(transform)
@@ -2511,18 +3889,24 @@ Créer la ZIV :
             # IGN's LiDAR HD covers France + DROM-COM, but a rough metropole
             # bbox is enough to surface the most common mistake: AOI in
             # WGS84 longitude/latitude or in another country (audit fix M-15).
-            METRO_BBOX = QgsRectangle(0.0, 6.0e6, 1.3e6, 7.2e6)
-            with contextlib.suppress(Exception):
-                if not aoi_geometry.boundingBox().intersects(METRO_BBOX):
-                    self.logger.warning(
-                        "L'emprise ne semble PAS recouvrir la France "
-                        "métropolitaine en Lambert-93 - vérifiez le SCR "
-                        "source de votre ZIP. La requête WFS pourrait "
-                        "ne renvoyer aucune dalle."
-                    )
+            #
+            # Ne vaut QUE pour la France : cette boite est en Lambert-93, et une
+            # emprise americaine en UTM n'y tomberait jamais. Hors de France, le
+            # refus est deja venu de `choisir()`, qui enumere les couvertures
+            # testees — un message plus utile que celui-ci.
+            if self._epsg_travail == 2154:
+                METRO_BBOX = QgsRectangle(0.0, 6.0e6, 1.3e6, 7.2e6)
+                with contextlib.suppress(Exception):
+                    if not aoi_geometry.boundingBox().intersects(METRO_BBOX):
+                        self.logger.warning(
+                            "L'emprise ne semble PAS recouvrir la France "
+                            "métropolitaine en Lambert-93 - vérifiez le SCR "
+                            "source de votre ZIP. La requête WFS pourrait "
+                            "ne renvoyer aucune dalle."
+                        )
 
-            # Keep the project centroid AND geometry (pre-buffer,
-            # EPSG:2154) - used by the photo-viewpoints generator for
+            # Keep the project centroid AND geometry (pre-buffer, in the
+            # working CRS) - used by the photo-viewpoints generator for
             # the distance rings and the azimuth field.
             try:
                 self._aoi_centroid = aoi_geometry.centroid().asPoint()
@@ -2533,11 +3917,12 @@ Créer la ZIV :
             except Exception:
                 self._aoi_geom = None
 
-            # Apply buffer around AOI (in meters, native unit of EPSG:2154)
+            # Apply buffer around AOI (in meters, native unit of the working CRS)
             buffer_geom = None
             if buffer_distance and buffer_distance > 0:
                 self.logger.info(
-                    f"Applying {buffer_distance} m buffer around the AOI (EPSG:2154)"
+                    f"Applying {buffer_distance} m buffer around the AOI "
+                    f"(EPSG:{self._epsg_travail})"
                 )
                 buffered = aoi_geometry.buffer(buffer_distance, 64)
                 if buffered is None or buffered.isEmpty():
@@ -2572,6 +3957,20 @@ Créer la ZIV :
                 if shp_path and load_layer:
                     self._buffer_shp_path = shp_path
 
+            # ---- Branche du fournisseur -----------------------------------
+            # Un fournisseur qui fournit son terrain remplace TOUT le bloc de
+            # decouverte ci-dessous — listage WFS, filtrage geometrique,
+            # avertissements de volume, import — par un appel unique. C'est le
+            # cas des Etats-Unis : le service 3DEP est transparent, il n'y a
+            # aucune dalle a decouvrir.
+            #
+            # La branche est posee ICI, avant la premiere requete, pour que la
+            # chaine francaise qui suit reste inchangee a l'octet : on ne la
+            # traverse simplement pas.
+            if self._fournisseur.fournit_terrain():
+                return self._terrain_par_fournisseur(
+                    aoi_geometry, downloads_dir, load_layer)
+
             # Query WFS for tiles
             self.logger.info("Querying WFS service for available tiles...")
             wfs_tiles = self._query_wfs_tiles(aoi_geometry, data_type_code)
@@ -2594,15 +3993,15 @@ Créer la ZIV :
                 echec = getattr(self, "_echec_wfs", "")
                 if echec:
                     detail_journal = (
-                        "Le service IGN n'a pas repondu la liste des dalles : %s. "
+                        "Le service de dalles n'a pas repondu la liste : %s. "
                         "Ce n'est PAS un defaut de couverture : verifier le "
                         "reseau, puis que les codes de couche sont toujours ceux "
-                        "que le WFS annonce (scripts/veiller_couches_ign.py)."
+                        "que le service annonce (scripts/veiller_couches_ign.py)."
                         % echec
                     )
                     detail_barre = (
-                        "Le service IGN n'a pas repondu - impossible de savoir "
-                        "si la zone est couverte."
+                        "Le service de dalles n'a pas repondu - impossible de "
+                        "savoir si la zone est couverte."
                     )
                 else:
                     detail_journal = (
@@ -2644,17 +4043,25 @@ Créer la ZIV :
             # garde le chemin d'origine : il ne s'assemble pas comme un raster.
             if import_dalles.est_raster(data_type):
                 try:
-                    return self._finalize_result(
-                        import_dalles.importer_raster(
-                            self,
-                            selected_tiles,
-                            downloads_dir,
-                            data_type,
-                            self.ZIV_TARGET_RES_M,
-                            fusionner=merge_strategy == 1,
-                            charger_couches=load_layer,
-                        )
+                    resultat = import_dalles.importer_raster(
+                        self,
+                        selected_tiles,
+                        downloads_dir,
+                        data_type,
+                        self.ZIV_TARGET_RES_M,
+                        fusionner=merge_strategy == 1,
+                        charger_couches=load_layer,
                     )
+                    # Les courbes de niveau se tirent du TERRAIN. Quand le
+                    # produit demande est une SURFACE, on va chercher le MNT
+                    # des memes dalles — sans quoi les isolignes epousent la
+                    # canopee et les toits. Cote americain le terrain nu est
+                    # simplement mis de cote avant la gravure ; ici il faut le
+                    # demander, la chaine francaise ne telechargeant que le
+                    # produit choisi.
+                    self._terrain_nu = self._mnt_pour_les_courbes(
+                        aoi_geometry, selected_tiles, downloads_dir, data_type)
+                    return self._finalize_result(resultat)
                 except Exception as e:
                     self.logger.error("Import des dalles impossible : %s" % e)
                     return {"OUTPUT_DIRECTORY": str(downloads_dir), "OUTPUT_FILES": ""}
@@ -2698,7 +4105,10 @@ Créer la ZIV :
                             tile["url"],
                             str(downloads_dir),
                             progress_tracker,
-                            force_download,
+                            # Le formulaire ne propose plus de forcer le
+                            # re-telechargement : une dalle deja tenue et
+                            # saine est reprise du cache.
+                            False,
                             tile["name"],  # Pass the unique name here
                         )
                         for tile in selected_tiles
@@ -2900,6 +4310,12 @@ Créer la ZIV :
                 "OUTPUT_FILES": ";".join(downloaded_files),
             })
 
+        except QgsProcessingException as e:
+            # Levee volontairement, deja journalisee la ou elle est nee : QGIS
+            # l'affiche en rouge et marque l'execution en echec. La convertir en
+            # dictionnaire vide, comme ci-dessous, la ferait passer pour reussie.
+            self.logger.error("Traitement interrompu : %s" % e)
+            raise
         except Exception as e:
             self.logger.error(f"Error in main processing: {str(e)}")
             import traceback
@@ -2911,7 +4327,10 @@ Créer la ZIV :
                 "Erreur pendant le traitement",
                 f"{e}\n\n--- Détail technique ---\n{tb}",
             )
-            return {}
+            # Rendre un dictionnaire ici valait « termine avec succes » pour
+            # Processing : le greffon affichait « finished » sur un calcul qui
+            # n'avait rien produit. Seule une exception marque l'echec.
+            raise QgsProcessingException(str(e)) from e
         finally:
             # Final cleanup
             self._cleanup_temp_files()

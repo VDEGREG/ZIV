@@ -3,9 +3,15 @@ ZIV_prime - plugin entry point (classFactory, toolbar, dependency check).
 
 Part of ZIV_prime, a GNU GPL v3 (or later) licensed QGIS plugin by G. DELSIGNE.
 
-Since 1.4.0 the IGN LiDAR HD tile import and since 1.5.0 the visibility engine
-are this plugin's own code (``import_dalles/``, ``moteur_visibilite/``,
-``algorithmes_ziv/``) - no third-party code remains in this package.
+This package covers TWO countries: France (IGN LiDAR HD) and the contiguous
+United States (USGS 3DEP, LANDFIRE, USA Structures, TIGER/Line). It grew as its own
+package from version 1.5.3 of this plugin, and was folded back in on
+2026-09-17 under the original identities, so that the people already using it
+receive an update rather than meeting a stranger.
+
+The tile import (``import_dalles/``), the visibility engine
+(``moteur_visibilite/``) and the two Processing algorithms (``algorithmes_ziv/``)
+are this plugin's own code - no third-party code remains in this package.
 
 See ``LICENSE`` and ``README.md`` at the root of the plugin for the full terms.
 """
@@ -16,17 +22,19 @@ import tempfile
 from pathlib import Path
 
 from qgis.core import Qgis, QgsApplication, QgsMessageLog, QgsSettings
-from qgis.PyQt.QtCore import QCoreApplication, QTranslator
+from qgis.PyQt.QtCore import QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QMessageBox, QToolButton
 
 # Plugin version
-VERSION = "1.5.6"
+VERSION = "1.6.0"
 # Nom affiche a l'utilisateur (fenetres, menu, journal).
 PLUGIN_NAME = "Zones d'influence visuelle (ZIV)"
 # Nom de paquet : dossier installe, espace QgsSettings, dossier temporaire
 # et contexte de traduction Qt. NE JAMAIS renommer : cela orphelinerait les
-# preferences stockees et changerait le chemin d'installation.
+# preferences stockees et changerait le chemin d'installation. La ligne
+# bi-pays a eu le sien un temps ; elle a repris celui-ci le 2026-09-17, ce qui
+# rend aux utilisateurs leurs reglages d'origine.
 PLUGIN_PACKAGE = "ZIV_prime"
 PLUGIN_DIR = Path(__file__).parent
 
@@ -123,16 +131,13 @@ class LidarPlugin:
         # Initialize plugin directory
         self.plugin_dir = Path(__file__).parent
 
-        # Initialize locale
-        locale_path = self.plugin_dir / "i18n"
-        if locale_path.exists():
-            self.translator = QTranslator()
-            # Defensive: QgsSettings may return None on a fresh profile (audit fix C-3)
-            locale = (QgsSettings().value("locale/userLocale") or "fr")[0:2]
-            locale_file = f"{PLUGIN_PACKAGE}_{locale}.qm"
-            if (locale_path / locale_file).exists():
-                self.translator.load(str(locale_path / locale_file))
-                QCoreApplication.installTranslator(self.translator)
+        # Langue : le reglage du greffon l'emporte sur celui de QGIS quand
+        # l'utilisateur a clique, sinon on suit QGIS. Le choix vit dans
+        # `langue.py`, partage avec les boutons FR/EN du formulaire — deux
+        # facons de choisir la langue finiraient par diverger.
+        from . import langue as langue_module
+
+        langue_module.appliquer(langue_module.retenue())
 
         QgsMessageLog.logMessage(
             f"{PLUGIN_NAME} plugin initialized", PLUGIN_NAME, Qgis.MessageLevel.Info
@@ -288,8 +293,7 @@ class LidarPlugin:
                 )
                 self.action_ziv.setToolTip(
                     self.tr(
-                        "Zones d'influence visuelle (ZIV) : téléchargement des dalles "
-                        "LiDAR HD de l'IGN et calcul de la visibilité"
+                        "Zones d'influence visuelle (ZIV): downloads national LiDAR tiles and computes visibility"
                     )
                 )
                 self.action_ziv.triggered.connect(self.run_ziv)
@@ -309,12 +313,11 @@ class LidarPlugin:
                 # Préférences globales (menu uniquement, pas d'icône barre
                 # d'outils pour ne pas l'encombrer).
                 self.action_prefs = QAction(
-                    self.tr("⚙ Préférences…"), self.iface.mainWindow()
+                    self.tr('⚙ Preferences…'), self.iface.mainWindow()
                 )
                 self.action_prefs.setToolTip(
                     self.tr(
-                        "Configurer les défauts du greffon : symbologie "
-                        "ZIV et dossier de logs."
+                        'Configure the plugin defaults: viewshed symbology and log folder.'
                     )
                 )
                 self.action_prefs.triggered.connect(self.run_preferences)
