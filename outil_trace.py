@@ -64,8 +64,8 @@ class OutilTrace(QgsMapTool):
         self.ponctuel = bool(ponctuel)
         self._au_termine = au_termine
         self._sommets = []
-        genre = (QgsWkbTypes.PointGeometry if self.ponctuel
-                 else QgsWkbTypes.PolygonGeometry)
+        genre = (QgsWkbTypes.GeometryType.PointGeometry if self.ponctuel
+                 else QgsWkbTypes.GeometryType.PolygonGeometry)
         self._bande = QgsRubberBand(self.canevas, genre)
         self._bande.setColor(QColor(255, 0, 0, 90))
         self._bande.setWidth(2)
@@ -95,8 +95,8 @@ class OutilTrace(QgsMapTool):
 
     # ---- l'apercu elastique -------------------------------------------
     def _peindre(self, en_cours=None):
-        genre = (QgsWkbTypes.PointGeometry if self.ponctuel
-                 else QgsWkbTypes.PolygonGeometry)
+        genre = (QgsWkbTypes.GeometryType.PointGeometry if self.ponctuel
+                 else QgsWkbTypes.GeometryType.PolygonGeometry)
         self._bande.reset(genre)
         points = self._sommets + ([en_cours] if en_cours is not None else [])
         dernier = len(points) - 1
@@ -188,8 +188,8 @@ class OutilTrace(QgsMapTool):
 
     def _effacer(self):
         self._sommets = []
-        genre = (QgsWkbTypes.PointGeometry if self.ponctuel
-                 else QgsWkbTypes.PolygonGeometry)
+        genre = (QgsWkbTypes.GeometryType.PointGeometry if self.ponctuel
+                 else QgsWkbTypes.GeometryType.PolygonGeometry)
         self._bande.reset(genre)
 
     def _avertir(self, message):

@@ -2046,7 +2046,7 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                 placement = getattr(QgsPalLayerSettings, "Line", None)
                 try:
                     from qgis.core import QgsUnitTypes
-                    millimetre = QgsUnitTypes.RenderMillimeters
+                    millimetre = QgsUnitTypes.RenderUnit.RenderMillimeters
                 except Exception:
                     millimetre = None
             if placement is not None:
