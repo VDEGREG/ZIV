@@ -40,7 +40,7 @@ from .geoplateforme import (
     volume_estime,
 )
 from .mosaique import MOYENNE, construire_mosaique, statistiques
-from .telechargement import telecharger_dalles
+from .telechargement import elaguer_manifeste, telecharger_dalles
 
 # Index des types du greffon : 0 MNT, 1 MNS, 2 MNH, 3 nuage de points.
 PRODUIT_PAR_TYPE = {0: "MNT", 1: "MNS", 2: "MNH"}
@@ -184,12 +184,17 @@ def importer_raster(algorithme, dalles, dossier, type_donnee, resolution,
     # s'accumuler dans le dossier temporaire. En cas d'echec de la fusion, au
     # contraire, on les garde : une reprise ne doit pas tout retelecharger.
     resultat["OUTPUT_FILES"] = ""
-    _effacer_dalles(chemins, journal)
+    _effacer_dalles(chemins, journal, dossier_dalles)
     return resultat
 
 
-def _effacer_dalles(chemins, journal):
-    """Supprime les dalles intermediaires et dit combien de place a ete rendue."""
+def _effacer_dalles(chemins, journal, dossier_dalles):
+    """Supprime les dalles intermediaires et dit combien de place a ete rendue.
+
+    Le manifeste du cache est elague dans le meme geste : il ne doit nommer que
+    des dalles encore sur le disque, sans quoi il cumule toutes les executions
+    passees et se lit comme le compte de ce qui vient d'etre fusionne.
+    """
     octets, efface = 0, 0
     for chemin in chemins:
         with contextlib.suppress(OSError):
@@ -201,3 +206,7 @@ def _effacer_dalles(chemins, journal):
             "%d dalle(s) temporaire(s) effacee(s) apres la fusion, %s rendus."
             % (efface, format_octets(octets))
         )
+    retirees = elaguer_manifeste(dossier_dalles)
+    if retirees:
+        journal.info("Manifeste du cache : %d entree(s) sans fichier retiree(s)."
+                     % retirees)

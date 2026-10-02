@@ -34,10 +34,15 @@ BATI = ("https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services"
 
 ROUTES = ("https://tigerweb.geo.census.gov/arcgis/rest/services"
           "/TIGERweb/Transportation/MapServer")
-# Couches retenues sur comptage, pas sur les noms : les variantes suffixees
-# d'une echelle sont des generalisations d'affichage et rendent le meme compte
-# (4, 5 et 6 rendent 45 ; 7 et 8 rendent 1323 sur l'emprise de test).
-COUCHES_ROUTES = (2, 3, 8)
+# Une couche par classe de route : primaire (2), secondaire (6), locale (8),
+# retenues sur les IDENTIFIANTS des troncons, ni sur les comptes ni sur les
+# noms. Mesure du 2026-10-02 sur Asheville : 4, 5 et 6 portent les memes 45
+# troncons au meme trace (11 902 sommets) — le suffixe d'echelle ne regle que
+# l'affichage — et 7 et 8 les memes 1323. La 3, « Interstates and US
+# Highways », n'en porte que 17, toutes comprises dans les 45 : retenue
+# jusqu'en 1.6.2, elle laissait au sol les routes d'Etat. Controle permanent :
+# U1 de `scripts/veiller_sources.py`.
+COUCHES_ROUTES = (2, 6, 8)
 
 # Plafond CONSTATE du service de bati, pas une preference. Le lien de page
 # suivante que le service fabrique lui-meme porte la meme valeur.

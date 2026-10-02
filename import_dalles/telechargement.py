@@ -60,6 +60,28 @@ def _ecrire_manifeste(dossier, manifeste):
         )
 
 
+def elaguer_manifeste(dossier):
+    """Retire du manifeste les dalles dont le fichier n'est plus sur le disque.
+
+    Le cache ne reprend une dalle que si son fichier existe encore : une entrée
+    sans fichier ne sert plus à rien. Or la fusion efface les dalles une fois
+    la mosaïque faite, et leurs entrées restaient — 544 le 2026-10-02, cumul de
+    toutes les exécutions passées, qu'un banc lisait comme le compte des
+    dalles fusionnées. Rend le nombre d'entrées retirées.
+    """
+    dossier = Path(dossier)
+    manifeste = _lire_manifeste(dossier)
+    if not isinstance(manifeste, dict):
+        return 0
+    gardees = {cle: entree for cle, entree in manifeste.items()
+               if isinstance(entree, dict)
+               and (dossier / str(entree.get("fichier") or "")).is_file()}
+    retirees = len(manifeste) - len(gardees)
+    if retirees:
+        _ecrire_manifeste(dossier, gardees)
+    return retirees
+
+
 def corriger_georeference(chemin):
     """Réécrit le SCR de la dalle en EPSG:2154 en bonne et due forme.
 
