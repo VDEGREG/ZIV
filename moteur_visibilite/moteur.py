@@ -112,7 +112,7 @@ RECUL_DEFAUT = 8
 
 
 def calculer(mnt, obs, courbure=True, refraction=REFRACTION_STANDARD,
-             recul=RECUL_DEFAUT, unite_marge="degres"):
+             recul=RECUL_DEFAUT, unite_marge="degres", calcul_marge=True):
     """Calcule la visibilité depuis `obs` sur `mnt`.
 
     `recul` : nombre de colonnes recalculées exactement avant de reprendre la
@@ -125,6 +125,10 @@ def calculer(mnt, obs, courbure=True, refraction=REFRACTION_STANDARD,
       - « profondeur_m » : 0 si la cible est vue, sinon le nombre de mètres
                            qu'il faudrait lui ajouter pour qu'elle apparaisse.
                            C'est la convention du greffon d'origine.
+
+    `calcul_marge` : faux quand seule la visibilité compte — `marge` vaut
+    alors None, et le calcul épargne deux arc-tangentes par cellule ainsi
+    qu'un tableau de la taille de la fenêtre.
     """
     if unite_marge not in ("degres", "profondeur_m"):
         raise ValueError("unite_marge inconnue : %r" % unite_marge)
@@ -151,7 +155,8 @@ def calculer(mnt, obs, courbure=True, refraction=REFRACTION_STANDARD,
     lig0, col0, n_lig, n_col = fenetre
 
     visible = np.zeros((n_lig, n_col), dtype=bool)
-    marge = np.full((n_lig, n_col), np.nan, dtype=np.float32)
+    marge = (np.full((n_lig, n_col), np.nan, dtype=np.float32) if calcul_marge
+             else None)
     valide = _masque_valide(mnt, obs, lig0, col0, n_lig, n_col, lig_obs, col_obs)
 
     for _nom, majeur, mineur, diagonales in _SECTEURS:
@@ -166,10 +171,12 @@ def calculer(mnt, obs, courbure=True, refraction=REFRACTION_STANDARD,
     lo, co = lig_obs - lig0, col_obs - col0
     if 0 <= lo < n_lig and 0 <= co < n_col and valide[lo, co]:
         visible[lo, co] = True
-        marge[lo, co] = 90.0 if unite_marge == "degres" else 0.0
+        if marge is not None:
+            marge[lo, co] = 90.0 if unite_marge == "degres" else 0.0
 
     visible &= valide
-    marge[~valide] = np.nan
+    if marge is not None:
+        marge[~valide] = np.nan
     return Resultat(visible, marge, valide, lig0, col0, lig_obs, col_obs, z_obs)
 
 
@@ -200,7 +207,11 @@ def _masque_valide(mnt, obs, lig0, col0, n_lig, n_col, lig_obs, col_obs):
 def _parcourir_secteur(mnt, obs, z_obs, lig_obs, col_obs, lig0, col0,
                        visible, marge, majeur, mineur, diagonales,
                        courbure, refraction, recul, unite_marge):
-    """Propage l'horizon le long d'un des quatre secteurs."""
+    """Propage l'horizon le long d'un des quatre secteurs.
+
+    `marge` à None : seule la visibilité est demandée, la marge n'est pas
+    calculée.
+    """
     pas_j = mnt.dx if majeur[1] != 0 else mnt.dy
     pas_i = mnt.dx if mineur[1] != 0 else mnt.dy
     n_j = int(obs.rayon // pas_j)
@@ -212,8 +223,13 @@ def _parcourir_secteur(mnt, obs, z_obs, lig_obs, col_obs, lig0, col0,
     n_lig, n_col = visible.shape
     # Colonnes gardées en mémoire pour le recul : altitudes **brutes** (la
     # correction de courbure dépend de la distance du point d'interception, pas
-    # de celle des cellules) et horizons.
-    altitudes, horizons = {}, {}
+    # de celle des cellules) et horizons. Les altitudes vivent dans un tampon
+    # TOURNANT, une ligne par colonne calée à gauche (la colonne c occupe ses
+    # 2c+1 premières cases) : le recul les relit d'un seul geste. `recul + 2`
+    # lignes suffisent — on n'en relit jamais que les `recul` précédentes.
+    tours = recul + 2
+    altitudes = np.full((tours, 2 * n_j + 1), np.nan, dtype=np.float64)
+    horizons = {}
 
     for j in range(1, n_j + 1):
         i = np.arange(-j, j + 1, dtype=np.int64)
@@ -227,7 +243,7 @@ def _parcourir_secteur(mnt, obs, z_obs, lig_obs, col_obs, lig0, col0,
         z_brut = np.full(i.shape, np.nan, dtype=np.float64)
         if dedans.any():
             z_brut[dedans] = z[lignes[dedans], colonnes[dedans]]
-        altitudes[j] = z_brut
+        altitudes[j % tours, :2 * j + 1] = z_brut
 
         distance = np.hypot(j * pas_j, i * pas_i)
         z_cellule = z_brut - abaissement(distance, refraction) if courbure else z_brut
@@ -245,7 +261,6 @@ def _parcourir_secteur(mnt, obs, z_obs, lig_obs, col_obs, lig0, col0,
         # l'horizon au lieu de le casser.
         horizons[j] = np.fmax(tan_terrain, tan_horizon)
         for vieux in (j - recul - 1, j - recul - 2):
-            altitudes.pop(vieux, None)
             horizons.pop(vieux, None)
 
         vu = tan_cible >= tan_horizon  # nan >= x vaut False : sans donnée = non vu
@@ -260,6 +275,8 @@ def _parcourir_secteur(mnt, obs, z_obs, lig_obs, col_obs, lig0, col0,
         interne = (lw >= 0) & (lw < n_lig) & (cw >= 0) & (cw < n_col)
         lw, cw = lw[interne], cw[interne]
         visible[lw, cw] = vu[ecrit][interne]
+        if marge is None:
+            continue
         cible_ecrite = tan_cible[ecrit][interne]
         horizon_ecrit = tan_horizon[ecrit][interne]
         if unite_marge == "degres":
@@ -297,14 +314,27 @@ def _horizon_avec_recul(i, j, recul, altitudes, horizons, z_obs,
     """
     tan_horizon = np.full(i.shape, HORIZON_INITIAL, dtype=np.float64)
     profondeur = min(recul, j - 1)
-    for pas in range(1, profondeur + 1):
-        colonne = j - pas
-        t = i * (colonne / j)
-        z_vise = _interpoler_colonne(altitudes[colonne], colonne, t)
-        distance = np.hypot(colonne * pas_j, t * pas_i)
+    if profondeur:
+        # Les `profondeur` colonnes d'un seul geste, sur un tableau
+        # profondeur x (2j+1) : ce sont, cellule par cellule, les opérations
+        # de la boucle d'origine, et le maximum ne dépend pas de l'ordre. Le
+        # résultat est donc identique au bit près (vérifié sur les rasters
+        # figés du banc) ; seuls disparaissent ~128 petits appels numpy par
+        # colonne, qui faisaient l'essentiel du temps.
+        colonnes = np.arange(j - 1, j - profondeur - 1, -1, dtype=np.int64)
+        t = i[None, :] * (colonnes / j)[:, None]
+        i0 = np.floor(t).astype(np.int64)
+        poids = t - i0
+        dernier = (2 * colonnes)[:, None]
+        k0 = np.clip(i0 + colonnes[:, None], 0, dernier)
+        k1 = np.clip(i0 + 1 + colonnes[:, None], 0, dernier)
+        rangs = (colonnes % altitudes.shape[0])[:, None]
+        z_vise = (1.0 - poids) * altitudes[rangs, k0] + poids * altitudes[rangs, k1]
+        distance = np.hypot((colonnes * pas_j)[:, None], t * pas_i)
         if courbure:
             z_vise = z_vise - abaissement(distance, refraction)
-        tan_horizon = np.fmax(tan_horizon, (z_vise - z_obs) / distance)
+        tan_horizon = np.fmax(tan_horizon,
+                              np.fmax.reduce((z_vise - z_obs) / distance, axis=0))
 
     if j - 1 > profondeur:
         colonne = j - profondeur

@@ -28,6 +28,18 @@
         <translation>Saisissez un rayon d'analyse, en mètres : il fixe l'étendue du terrain téléchargé comme celle de la ZIV.</translation>
     </message>
     <message>
+        <source>At a radius of %.0f m the viewshed needs about %.1f GB of memory, more than this computer can give it (%.1f GB in total). Reduce the radius.</source>
+        <translation>Avec un rayon de %.0f m, la ZIV demande environ %.1f Go de mémoire, plus que ce poste ne peut lui donner (%.1f Go au total). Réduisez le rayon.</translation>
+    </message>
+    <message>
+        <source>A point cloud cannot be used to compute a viewshed: choose the DSM (recommended), the DTM or the DHM.</source>
+        <translation>Un nuage de points ne permet pas de calculer une ZIV : choisissez le MNS (recommandé), le MNT ou le MNH.</translation>
+    </message>
+    <message>
+        <source>Keep the tiles merged: the viewshed is computed on a single terrain, and without merging only the first tile would be used.</source>
+        <translation>Gardez les dalles fusionnées : la ZIV se calcule sur un seul terrain, et sans fusion seule la première dalle serait prise.</translation>
+    </message>
+    <message>
         <source>Data type to download</source>
         <translation>Type de données à télécharger</translation>
     </message>
@@ -36,8 +48,8 @@
         <translation>Fusionner les dalles téléchargées (MNT/MNS/MNH)</translation>
     </message>
     <message>
-        <source>Load the data once downloaded</source>
-        <translation>Charger les données après le téléchargement</translation>
+        <source>Load the analysis radius layer into the project</source>
+        <translation>Charger la couche du rayon d'analyse dans le projet</translation>
     </message>
     <message>
         <source>Create the visual influence zone from the merged terrain</source>

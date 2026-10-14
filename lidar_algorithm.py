@@ -71,7 +71,6 @@ from qgis.core import (
 )
 from qgis.PyQt.QtCore import QCoreApplication, QVariant
 from qgis.PyQt.QtGui import QColor, QFont
-from qgis.PyQt.QtWidgets import QMessageBox
 from requests.adapters import HTTPAdapter, Retry
 
 from .import_dalles import adaptateur as import_dalles
@@ -87,6 +86,67 @@ PLUGIN_DISPLAY_NAME = "Zones d'influence visuelle (ZIV)"
 # (m) » et la valeur par défaut par 4,3 m.
 ZIV_HAUTEUR_LIBELLE = 'Viewshed: observer height (metres)'
 ZIV_HAUTEUR_DEFAUT = 1.7
+
+# Ce que disent les valeurs de la ZIV, une seule definition pour les trois
+# legendes. « Hors visibilite » melait trois etats sous un meme mot : non vu,
+# masque sous foret ou bati, et jamais calcule. Le dernier porte desormais le
+# sans-donnee (`SANS_DONNEE_ZIV`, pose hors du rayon d'analyse).
+NON_VU = "Non vu (forêt et bâti compris)"
+EMPRISE = "Emprise (0.1)"
+SANS_DONNEE_ZIV = -9999.0
+
+
+# Memoire du calcul de visibilite, par cellule de la maille de travail.
+# Mesure du 2026-10-02 (tracemalloc, rayons de 2 et 4 km, loi en R2 tenue) :
+# 8 octets pour le terrain et le cumul, 22,9 au pic d'un point d'observation.
+# A 2 m : 4,5 Go a 12 km, 12 Go a 20 km — et 77 Go aux 50 km que le
+# formulaire accepte. On refuse un rayon qui depasse ce que le poste peut
+# donner, plutot qu'une limite fixe qui brimerait les machines bien dotees.
+OCTETS_PAR_CELLULE = 31.0
+PART_MEMOIRE_ADMISE = 0.75
+
+
+def _memoire_physique():
+    """Memoire vive totale du poste, en octets ; None si on ne sait pas la lire."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class _Etat(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong),
+                            ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            etat = _Etat()
+            etat.dwLength = ctypes.sizeof(_Etat)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(etat)):
+                return int(etat.ullTotalPhys)
+            return None
+        return int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
+    except Exception:
+        return None
+
+
+def _version_du_greffon():
+    """La version publiee, lue dans metadata.txt : une seule source de verite.
+
+    `RawConfigParser`, sans interpolation : un « % » du changelog ne doit pas
+    faire perdre la version (lessons.md, 2026-09-03).
+    """
+    import configparser
+
+    lecteur = configparser.RawConfigParser()
+    try:
+        lecteur.read(str(Path(__file__).with_name("metadata.txt")), encoding="utf-8")
+        return lecteur.get("general", "version")
+    except Exception:
+        return "?"
 
 
 class DownloadProgressTracker:
@@ -130,6 +190,11 @@ class LidarLogger:
         self.feedback = feedback
         self.log_to_file = log_to_file
         self.log_file = None
+        # Tout avertissement ou erreur de l'execution, dans l'ordre : c'est le
+        # registre des degradations que la fiche de provenance reporte. Un
+        # repli qui ne se dit qu'au fil du journal se perd des la fermeture
+        # de la fenetre.
+        self.avertissements = []
         if log_to_file:
             # Use the proper QGIS3 settings dir (audit fix M-2). Fall back to
             # the OS tempdir if QgsApplication is not initialised yet.
@@ -172,12 +237,14 @@ class LidarLogger:
 
     def error(self, message: str):
         """Log error message"""
+        self.avertissements.append("ERREUR : %s" % message)
         self.feedback.reportError(message)
         QgsMessageLog.logMessage(message, PLUGIN_DISPLAY_NAME, Qgis.MessageLevel.Critical)
         self._write_to_file("ERROR", message)
 
     def warning(self, message: str):
         """Log warning message"""
+        self.avertissements.append(message)
         self.feedback.pushWarning(message)
         QgsMessageLog.logMessage(message, PLUGIN_DISPLAY_NAME, Qgis.MessageLevel.Warning)
         self._write_to_file("WARNING", message)
@@ -422,6 +489,31 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                 "Enter an analysis radius, in metres: it sets both the area "
                 "of terrain downloaded and the extent of the viewshed."
             )
+        # Un rayon que le poste ne peut pas calculer : le refuser ici, avant
+        # tout telechargement, plutot qu'un plantage par manque de memoire.
+        # Borne basse : la fenetre d'un point, sans l'emprise elle-meme.
+        rayon = self.parameterAsDouble(parameters, self.ZIV_RADIUS, context)
+        besoin = (2.0 * rayon / self.ZIV_TARGET_RES_M) ** 2 * OCTETS_PAR_CELLULE
+        totale = _memoire_physique()
+        if totale and besoin > PART_MEMOIRE_ADMISE * totale:
+            return False, self.tr(
+                "At a radius of %.0f m the viewshed needs about %.1f GB of "
+                "memory, more than this computer can give it (%.1f GB in "
+                "total). Reduce the radius."
+            ) % (rayon, besoin / 2**30, totale / 2**30)
+        # Deux combinaisons qui ne donnaient PAS de ZIV juste, sans le dire :
+        # un nuage de points ne se calcule pas (des centaines de Mo pour rien),
+        # et sans fusion la ZIV ne portait que sur la premiere dalle.
+        if self.parameterAsEnum(parameters, self.DATA_TYPE, context) == 3:
+            return False, self.tr(
+                "A point cloud cannot be used to compute a viewshed: choose "
+                "the DSM (recommended), the DTM or the DHM."
+            )
+        if not self.parameterAsBool(parameters, self.MERGE_TILES, context):
+            return False, self.tr(
+                "Keep the tiles merged: the viewshed is computed on a single "
+                "terrain, and without merging only the first tile would be used."
+            )
         return super().checkParameterValues(parameters, context)
 
     def initAlgorithm(self, config=None):
@@ -495,7 +587,10 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.LOAD_LAYER,
-                self.tr('Load the data once downloaded'),
+                # Le libelle dit ce que la case fait : les dalles ne sont jamais
+                # chargees, la ZIV et ses couches le sont toujours ; seule la
+                # couche du rayon en depend (audit du 2026-10-02).
+                self.tr('Load the analysis radius layer into the project'),
                 defaultValue=True,
             )
         )
@@ -1021,9 +1116,12 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         """Apply the ZIV symbology - dispatched on `self._ziv_symbology`.
 
         Pixel value meaning:
-          - NoData / 0  : cell outside the analysis area (no info / burn)
-          - 0.1         : project footprint rasterized at 0.1
-          - 1+          : viewshed count = nb observers seeing the cell
+          - NoData      : outside the analysis radius - never computed
+          - 0           : not seen, including the cells forced there by the
+                          forest / building masking
+          - 0.1         : footprint of the area of interest
+          - 1+          : number of contour points (one every 50 m along the
+                          area of interest) that see the cell
 
         Renderers (audit V7):
           - 0 SYMB_SPOTLIGHT_NIGHT : night-black 80% on non-visible cells,
@@ -1055,11 +1153,9 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         color_ramp.setColorRampType(QgsColorRampShader.Type.Interpolated)
         color_ramp.setColorRampItemList(
             [
-                QgsColorRampShader.ColorRampItem(-1e6, night, "Hors visibilité"),
-                QgsColorRampShader.ColorRampItem(0.0999, night, "Hors visibilité"),
-                QgsColorRampShader.ColorRampItem(
-                    0.1, invisible, "Empreinte projet (0.1)"
-                ),
+                QgsColorRampShader.ColorRampItem(-1e6, night, NON_VU),
+                QgsColorRampShader.ColorRampItem(0.0999, night, NON_VU),
+                QgsColorRampShader.ColorRampItem(0.1, invisible, EMPRISE),
                 QgsColorRampShader.ColorRampItem(1e6, invisible, "Visible"),
             ]
         )
@@ -1087,22 +1183,22 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         color_ramp.setColorRampType(QgsColorRampShader.Type.Interpolated)
         color_ramp.setColorRampItemList(
             [
-                QgsColorRampShader.ColorRampItem(-1e6, invisible, "Hors visibilité"),
-                QgsColorRampShader.ColorRampItem(0.0999, invisible, "Hors visibilité"),
+                QgsColorRampShader.ColorRampItem(-1e6, invisible, NON_VU),
+                QgsColorRampShader.ColorRampItem(0.0999, invisible, NON_VU),
+                QgsColorRampShader.ColorRampItem(0.1, invisible, EMPRISE),
+                # Ce qu'on compte, ce sont des POINTS du contour (un tous les
+                # 50 m), pas des personnes : « 1 observateur » le faisait lire.
                 QgsColorRampShader.ColorRampItem(
-                    0.1, invisible, "Empreinte projet (0.1)"
+                    1.0, QColor(255, 255, 255, 180), "Vu depuis 1 point du contour"
                 ),
                 QgsColorRampShader.ColorRampItem(
-                    1.0, QColor(255, 255, 255, 180), "1 observateur"
+                    4.0, QColor(255, 235, 100, 200), "≥ 4 points"
                 ),
                 QgsColorRampShader.ColorRampItem(
-                    4.0, QColor(255, 235, 100, 200), "≥ 4"
+                    8.0, QColor(255, 150, 30, 220), "≥ 8 points"
                 ),
                 QgsColorRampShader.ColorRampItem(
-                    8.0, QColor(255, 150, 30, 220), "≥ 8"
-                ),
-                QgsColorRampShader.ColorRampItem(
-                    16.0, QColor(200, 20, 30, 235), "≥ 16"
+                    16.0, QColor(200, 20, 30, 235), "≥ 16 points"
                 ),
             ]
         )
@@ -1128,8 +1224,8 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         color_ramp.setColorRampType(QgsColorRampShader.Type.Discrete)
         color_ramp.setColorRampItemList(
             [
-                QgsColorRampShader.ColorRampItem(0.0999, invisible, "Hors visibilité"),
-                QgsColorRampShader.ColorRampItem(0.1, invisible, "Empreinte (0.1)"),
+                QgsColorRampShader.ColorRampItem(0.0999, invisible, NON_VU),
+                QgsColorRampShader.ColorRampItem(0.1, invisible, EMPRISE),
                 QgsColorRampShader.ColorRampItem(1e6, red, "Visible"),
             ]
         )
@@ -1581,6 +1677,88 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                 "ZIV peut mordre sur la zone de projet." % erreur)
             return False
 
+    def _poser_sans_donnee_hors_du_rayon(self, chemin_ziv, emprise, rayon):
+        """Les cellules hors du rayon d'analyse passent en sans-donnee.
+
+        Aucun observateur ne les a calculees : le viewshed part d'un fond a 0
+        et `gdal:merge` assemble sans sans-donnee. Elles valaient donc 0, comme
+        une cellule regardee et NON VUE — dans tous les coins du raster. Les
+        marquer laisse a 0 ce qui a ete regarde sans etre vu, et permet a toute
+        analyse en aval (part visible, surfaces) de compter juste.
+
+        `allTouched` : une cellule que le bord du rayon effleure reste
+        calculee. Meilleur effort : en cas d'echec, la ZIV reste telle quelle.
+        """
+        if not chemin_ziv or emprise is None or not rayon or float(rayon) <= 0:
+            return 0
+        jeu = masque = None
+        chemin = None
+        try:
+            import numpy as np
+            from osgeo import gdal, ogr, osr
+
+            geometries = [e.geometry() for e in emprise.getFeatures()
+                          if e.hasGeometry() and not e.geometry().isEmpty()]
+            if not geometries:
+                return 0
+            zone = QgsGeometry.unaryUnion(geometries).buffer(float(rayon), 32)
+            if zone is None or zone.isEmpty():
+                return 0
+
+            dossier = Path(str(getattr(self, "_working_dir", "")
+                               or Path(chemin_ziv).parent))
+            chemin = dossier / "_ziv_rayon_analyse.geojson"
+            if chemin.exists():
+                chemin.unlink()
+            systeme = osr.SpatialReference()
+            systeme.ImportFromWkt(emprise.crs().toWkt())
+            source = ogr.GetDriverByName("GeoJSON").CreateDataSource(str(chemin))
+            couche = source.CreateLayer("rayon", systeme, ogr.wkbUnknown)
+            entite = ogr.Feature(couche.GetLayerDefn())
+            entite.SetGeometry(ogr.CreateGeometryFromWkt(zone.asWkt()))
+            couche.CreateFeature(entite)
+            source = None
+
+            gdal.UseExceptions()
+            jeu = gdal.Open(str(chemin_ziv), gdal.GA_Update)
+            masque = gdal.GetDriverByName("MEM").Create(
+                "", jeu.RasterXSize, jeu.RasterYSize, 1, gdal.GDT_Byte)
+            masque.SetGeoTransform(jeu.GetGeoTransform())
+            masque.SetProjection(jeu.GetProjection())
+            gdal.Rasterize(masque, str(chemin), options=gdal.RasterizeOptions(
+                burnValues=[1], allTouched=True))
+            dehors = np.asarray(masque.GetRasterBand(1).ReadAsArray()) == 0
+
+            bande = jeu.GetRasterBand(1)
+            valeurs = np.asarray(bande.ReadAsArray(), dtype="float32")
+            ancienne = bande.GetNoDataValue()
+            if ancienne is not None:
+                dehors |= np.isclose(valeurs, ancienne)
+            nombre = int(dehors.sum())
+            if nombre:
+                valeurs[dehors] = SANS_DONNEE_ZIV
+                bande.WriteArray(valeurs)
+            bande.SetNoDataValue(SANS_DONNEE_ZIV)
+            bande.ComputeStatistics(False)
+            jeu.FlushCache()
+            self.logger.info(
+                "ZIV : %d cellule(s) hors du rayon d'analyse marquees "
+                "sans-donnee — jamais calculees, elles ne se lisent plus "
+                "« non vu »." % nombre)
+            return nombre
+        except Exception as erreur:
+            self.logger.warning(
+                "Sans-donnee hors du rayon non pose (%s) : les cellules jamais "
+                "calculees restent a 0, comme du non vu." % erreur)
+            return 0
+        finally:
+            # Sous Windows un fichier reste verrouille tant que vit la
+            # derniere reference : liberer avant de rendre la main.
+            jeu = masque = None
+            if chemin is not None:
+                with contextlib.suppress(OSError):
+                    chemin.unlink()
+
     def _run_ziv_model(
         self,
         dem_path: str,
@@ -1632,7 +1810,9 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
             # cellules, soit 113 Go — pour un calcul de 6 x 6 km.
             emprise_calee = self._caler_emprise_sur_le_mnt(zip_source, dem_path)
             if emprise_calee is None:
-                return ""
+                raise QgsProcessingException(
+                    "Calcul de la ZIV impossible : l'emprise n'a pas pu etre "
+                    "calee sur le terrain (voir les messages ci-dessus).")
             # Une emprise PONCTUELLE n'a pas de contour, et c'est le contour
             # que le modele parcourt pour poser ses observateurs.
             emprise_calee = self._donner_une_surface_aux_points(
@@ -1660,6 +1840,9 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                 # du projet y passe comme le reste. On la rend EN DERNIER.
                 self._rendre_lempreinte_du_projet(
                     ziv_result_path, emprise_calee)
+                # Ce que personne n'a calcule ne doit pas se lire « non vu ».
+                self._poser_sans_donnee_hors_du_rayon(
+                    ziv_result_path, emprise_calee, ziv_radius)
                 # Try to auto-load the produced ZIV raster with custom styling.
                 try:
                     layer = QgsRasterLayer(
@@ -1676,47 +1859,24 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                 self.logger.warning("ZIV model returned no output path")
             return ziv_result_path
 
+        except QgsProcessingException:
+            raise
         except Exception as e:
+            # Une annulation pendant le modele n'est pas un echec : la seconde
+            # garde de _finalize_result retire ce qui a deja ete charge.
+            retour = getattr(self, "feedback", None)
+            if retour is not None and retour.isCanceled():
+                self.logger.info("Calcul de la ZIV interrompu par l'annulation.")
+                return ""
             self.logger.error(f"Error running ZIV model: {str(e)}")
             import traceback
 
-            tb = traceback.format_exc()
-            self.logger.error(tb)
-            # Show a persistent popup so the user can actually read the error
-            # rather than seeing it flash by in the Processing dialog log.
-            self._show_persistent_error(
-                "Erreur lors du calcul de la ZIV",
-                f"{e}\n\n--- Détail technique ---\n{tb}",
-            )
-            return ""
-
-    def _show_persistent_error(self, title: str, message: str) -> None:
-        """Display a modal QMessageBox.critical so the error doesn't vanish
-        when the Processing dialog auto-closes."""
-        try:
-            main_win = None
-            with contextlib.suppress(Exception):
-                from qgis.utils import iface as _iface
-
-                if _iface is not None:
-                    main_win = _iface.mainWindow()
-            box = QMessageBox(main_win)
-            box.setIcon(QMessageBox.Icon.Critical)
-            box.setWindowTitle(f"{PLUGIN_DISPLAY_NAME} - {title}")
-            box.setText(title)
-            # Show only the short message in the main area, the full
-            # traceback goes into the detailed-text section so the dialog
-            # stays readable.
-            short = message.split("\n\n--- Détail technique ---", 1)[0]
-            box.setInformativeText(short)
-            if "Détail technique" in message:
-                box.setDetailedText(message)
-            box.setStandardButtons(QMessageBox.StandardButton.Ok)
-            box.exec()
-        except Exception as e:
-            # Last resort - never crash the plugin because of error display
-            with contextlib.suppress(Exception):
-                self.logger.error(f"Could not show error popup: {e}")
+            self.logger.error(traceback.format_exc())
+            # Plus de boite modale : une exception suffit. Processing garde sa
+            # fenetre ouverte sur un echec (`keepOpen = not successful`, dans
+            # les deux QGIS) et l'affiche en rouge ; la boite, elle, ne servait
+            # qu'a rattraper un faux succes, et bloquait modeles et bancs.
+            raise QgsProcessingException("Calcul de la ZIV impossible : %s" % e) from e
 
     def _terrain_par_fournisseur(self, aoi_geometry, dossier, charger_couches):
         """Terrain et surface occultante par le fournisseur, puis chaînage ZIV.
@@ -2313,6 +2473,181 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         for ligne in lignes:
             self.logger.info(ligne)
 
+        from .fournisseurs import usa_vegetation
+
+        self._fiche().setdefault("sources", {}).update({
+            "terrain": {"service": "USGS 3DEP", "resolution_m": resolution,
+                        "mode_replie": resolution > self.ZIV_TARGET_RES_M + 1e-6},
+            "vegetation": {"service": "LANDFIRE %s (EVH, CH)" % usa_vegetation.MILLESIME,
+                           "cellules_par_provenance": provenance or None},
+            "bati": bati or None,
+            "resume": lignes[1:],
+            "attribution": ("USGS 3DEP ; LANDFIRE ; FEMA/ORNL USA Structures ; "
+                            "US Census TIGER/Line"),
+        })
+
+    def _fiche(self):
+        """La fiche de provenance de l'execution, creee au besoin."""
+        fiche = getattr(self, "_provenance", None)
+        if fiche is None:
+            fiche = self._provenance = {}
+        return fiche
+
+    def _ouvrir_provenance(self, data_type, rayon, hauteur):
+        """Commence la fiche de provenance : quel greffon, quand, quels reglages.
+
+        Deux ZIV d'apparence identique peuvent reposer sur des hypotheses et
+        des donnees tres differentes. La fiche, ecrite a cote du raster, le
+        dit une fois pour toutes ; le journal, lui, se perd avec la fenetre.
+        """
+        options = self.DATA_TYPE_OPTIONS
+        self._provenance = {
+            "greffon": {"nom": PLUGIN_DISPLAY_NAME,
+                        "version": _version_du_greffon(),
+                        "algorithme": "genziv:generate"},
+            "date": datetime.now().isoformat(timespec="seconds"),
+            "journal": str(getattr(self.logger, "log_file", "") or ""),
+            "parametres": {
+                "rayon_analyse_m": rayon,
+                "hauteur_saisie_m": hauteur,
+                "type_donnees": (options[data_type] if 0 <= data_type < len(options)
+                                 else data_type),
+                "maille_m": self.ZIV_TARGET_RES_M,
+                "symbologie": getattr(self, "_ziv_symbology", None),
+                "points_de_vue_demandes": getattr(self, "_viewpoints_count", 0),
+                "courbes_de_niveau": bool(getattr(self, "_courbes_demandees", False)),
+            },
+            "hypotheses": self._hypotheses_du_modele(),
+            "sources": {},
+        }
+
+    def _hypotheses_du_modele(self):
+        """Ce que le modele de ZIV suppose, LU dans le modele et non recopie.
+
+        La fiche dit ce qui a reellement tourne, et restera vraie le jour ou
+        ces reglages changeront : hauteur de la cible, courbure, refraction,
+        espacement des points poses sur le contour de l'emprise.
+        """
+        hypotheses = {
+            "hauteur_saisie_appliquee_a": "points poses sur le contour de "
+                                          "l'emprise (observateurs du calcul)",
+        }
+
+        def nombre(valeur):
+            try:
+                return float(valeur)
+            except (TypeError, ValueError):
+                return valeur
+
+        try:
+            import xml.etree.ElementTree as ElementTree
+
+            racine = ElementTree.parse(
+                str(Path(__file__).parent / "models" / "creation_ziv.model3")).getroot()
+            for noeud in racine.iter("Option"):
+                enfants = noeud.findall("Option")
+                algorithme = next((o.get("value") for o in enfants
+                                   if o.get("name") == "alg_id"), None)
+                params = next((o for o in enfants if o.get("name") == "params"), None)
+                if not algorithme or params is None:
+                    continue
+                statiques = {}
+                for liste in params.findall("Option"):
+                    for carte in liste.findall("Option"):
+                        for valeur in carte.findall("Option"):
+                            if valeur.get("name") == "static_value":
+                                statiques[liste.get("name")] = valeur.get("value")
+                if algorithme.endswith("pointsalonglines") and "DISTANCE" in statiques:
+                    hypotheses["espacement_points_contour_m"] = nombre(statiques["DISTANCE"])
+                if "TARGET_HEIGHT" in statiques:
+                    hypotheses["hauteur_cible_m"] = nombre(statiques["TARGET_HEIGHT"])
+                if "USE_CURVATURE" in statiques:
+                    hypotheses["courbure_terrestre"] = statiques["USE_CURVATURE"] == "true"
+                if "REFRACTION" in statiques:
+                    hypotheses["refraction"] = nombre(statiques["REFRACTION"])
+        except Exception as erreur:
+            hypotheses["modele_illisible"] = str(erreur)
+        return hypotheses
+
+    def _noter_sources_france(self, dalles, propriete_url):
+        """Les sources de la chaine francaise : dalles, editions, masquage."""
+        from . import donnees_ign
+        from .import_dalles import geoplateforme
+
+        editions = sorted({str((d.get("properties") or {}).get("timestamp") or "")
+                           for d in dalles} - {""})
+        self._fiche().setdefault("sources", {}).update({
+            "terrain": {"service": "IGN Geoplateforme - LiDAR HD",
+                        "couche": geoplateforme.TYPENAME_DALLES,
+                        "produit": propriete_url, "dalles": len(dalles),
+                        "editions": [editions[0], editions[-1]] if editions else []},
+            "masquage": {"foret": donnees_ign.COUCHE_FORET,
+                         "bati": donnees_ign.COUCHE_BATIMENTS},
+            "attribution": "IGN - LiDAR HD, BD TOPO, BD Foret V2 - Licence "
+                           "Ouverte 2.0 (Etalab)",
+        })
+
+    def _ecrire_provenance(self, result_dict):
+        """Ecrit la fiche a cote de la ZIV, en JSON. Rend son chemin, ou "".
+
+        Meilleur effort : une fiche manquante ne retire rien au resultat.
+        """
+        fiche = getattr(self, "_provenance", None)
+        ziv = result_dict.get(self.ZIV_OUTPUT, "") if result_dict else ""
+        if not fiche or not ziv:
+            return ""
+        jeu = None
+        try:
+            import numpy as np
+            from osgeo import gdal
+
+            fournisseur = getattr(self, "_fournisseur", None)
+            fiche["fournisseur"] = {
+                "id": getattr(fournisseur, "ID", ""),
+                "nom": getattr(fournisseur, "NOM", ""),
+                "epsg_calcul": getattr(self, "_epsg_travail", None),
+            }
+            # Par blocs de lignes : la ZIV d'un grand rayon pese des centaines
+            # de Mo, la fiche n'a pas a les tenir en memoire d'un coup.
+            gdal.UseExceptions()
+            jeu = gdal.Open(str(ziv))
+            bande = jeu.GetRasterBand(1)
+            sans_donnee = bande.GetNoDataValue()
+            calculees = vues = 0
+            for debut in range(0, jeu.RasterYSize, 1024):
+                hauteur = min(1024, jeu.RasterYSize - debut)
+                bloc = np.asarray(bande.ReadAsArray(0, debut, jeu.RasterXSize, hauteur))
+                valides = np.isfinite(bloc)
+                if sans_donnee is not None:
+                    valides &= ~np.isclose(bloc, sans_donnee)
+                calculees += int(valides.sum())
+                vues += int((valides & (bloc >= 1.0)).sum())
+            fiche["resultat"] = {
+                "ziv": str(ziv),
+                "cellules_calculees": calculees,
+                "cellules_vues": vues,
+                "part_vue_pct": round(100.0 * vues / calculees, 2) if calculees else None,
+                "valeurs": {
+                    "sans-donnee": "hors du rayon d'analyse, jamais calcule",
+                    "0": "non vu, y compris sous foret et bati masques",
+                    "0.1": "emprise",
+                    ">= 1": "nombre de points du contour qui voient la cellule",
+                },
+                "sorties": {cle: valeur for cle, valeur in result_dict.items()
+                            if isinstance(valeur, str) and valeur},
+            }
+            fiche["avertissements"] = list(getattr(self.logger, "avertissements", []))
+            chemin = Path(str(ziv)).with_name(Path(str(ziv)).stem + "_provenance.json")
+            chemin.write_text(json.dumps(fiche, indent=1, ensure_ascii=False, default=str),
+                              encoding="utf-8")
+            self.logger.info("Fiche de provenance : %s" % chemin)
+            return str(chemin)
+        except Exception as erreur:
+            self.logger.warning("Fiche de provenance non ecrite (%s)." % erreur)
+            return ""
+        finally:
+            jeu = None
+
     def _finalize_result(self, result_dict: dict) -> dict:
         # Persist the tile manifest as the very first thing - even if the
         # ZIV step fails later, the tiles we've downloaded are still
@@ -2364,22 +2699,22 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         # téléchargement". See changelog of v3.0.9 for the full history.
 
         # ---- ZIV step ----
+        # Chaque sortie sans ZIV est un ECHEC : rendre le dictionnaire valait
+        # « termine » pour Processing, avec un rayon et des courbes charges
+        # autour d'une ZIV absente (lessons.md, 2026-09-11, regle 4).
         if getattr(self, "_ziv_requested", False):
             if not dem_path:
-                self.logger.warning(
-                    "ZIV requested but no output file available - skipping ZIV"
-                )
+                raise QgsProcessingException(
+                    "Aucun terrain produit : la ZIV ne peut pas etre calculee.")
             elif str(dem_path).lower().endswith(
                 (".laz", ".las", ".copc.laz")
             ):
-                self.logger.warning(
+                raise QgsProcessingException(
                     "ZIV requires a DEM raster (MNT/MNS/MNH) - "
-                    "cannot use point cloud output"
-                )
+                    "cannot use point cloud output")
             elif not dem_is_valid_raster:
-                self.logger.warning(
-                    f"ZIV step skipped - unsupported DEM format: {dem_path}"
-                )
+                raise QgsProcessingException(
+                    f"ZIV step skipped - unsupported DEM format: {dem_path}")
             else:
                 ziv_path = self._run_ziv_model(
                     dem_path,
@@ -2390,6 +2725,10 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                 )
                 if ziv_path:
                     result_dict[self.ZIV_OUTPUT] = ziv_path
+                elif not self.feedback.isCanceled():
+                    raise QgsProcessingException(
+                        "Le modele de ZIV n'a rendu aucun raster "
+                        "(voir les messages ci-dessus).")
 
         # ---- 3) Hide (do NOT delete) the merged DEM once ZIV is done ----
         if ziv_path and dem_layer_id:
@@ -2469,6 +2808,9 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
 
         # ---- 5) Et l'ordre de la legende, une fois tout en place ------------
         self._ordonner_les_couches(result_dict)
+
+        # ---- 6) La fiche de provenance, sur le livrable definitif -----------
+        self._ecrire_provenance(result_dict)
 
         return result_dict
 
@@ -3706,18 +4048,21 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
             if ziv_output_param:
                 output_folder = Path(ziv_output_param).parent
             else:
-                import tempfile as _tmp
+                # Le dossier temporaire de Processing, et non %TEMP% : QGIS le
+                # vide lui-meme a la fermeture, comme pour toute sortie
+                # temporaire. Sous %TEMP%, chaque calcul laissait son dossier
+                # ZIV_* — 38 dossiers et 901 Mo le 2026-10-02 sur un poste.
+                from qgis.core import QgsProcessingUtils
 
-                output_folder = Path(_tmp.gettempdir()) / (
+                output_folder = Path(QgsProcessingUtils.tempFolder()) / (
                     f"ZIV_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 )
             try:
                 output_folder.mkdir(parents=True, exist_ok=True)
             except Exception as mk_err:
-                self.logger.error(
+                raise QgsProcessingException(
                     f"Cannot create working directory {output_folder}: {mk_err}"
-                )
-                return {}
+                ) from mk_err
             self._working_dir = output_folder
 
             # The analysis radius is used both for buffering the AOI before WFS
@@ -3771,6 +4116,7 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                 )
             except Exception:
                 self._viewpoints_count = 0
+            self._ouvrir_provenance(data_type, ziv_radius, ziv_panel_height)
             # Pass the AOI to the ZIV model AS-IS (path, layer id or layer
             # object - QGIS's processing.run knows how to resolve all of
             # these for a "vector" parameter). The previous, more elaborate
@@ -3792,8 +4138,7 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
             # Get data type code
             data_type_code = self.DATA_TYPE_CODES.get(data_type)
             if not data_type_code:
-                self.logger.error(f"Invalid data type: {data_type}")
-                return {}
+                raise QgsProcessingException(f"Invalid data type: {data_type}")
 
             # Log processing parameters
             self.logger.info(f"Processing parameters:")
@@ -3826,13 +4171,14 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
 
             # Check initial disk space
             if not self._check_disk_space(output_folder, self.MIN_DISK_SPACE_MB):
-                return {}
+                raise QgsProcessingException(
+                    "Espace disque insuffisant dans %s : il faut au moins %d Mo "
+                    "libres." % (output_folder, self.MIN_DISK_SPACE_MB))
 
             # Process AOI
             features = list(source.getFeatures())
             if not features:
-                self.logger.error("No features found in input layer")
-                return {}
+                raise QgsProcessingException("No features found in input layer")
 
             # Handle AOI geometry and CRS
             # Merge all features into a single geometry to support multi-feature
@@ -3858,6 +4204,15 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
             #
             # Le centroide est calcule sur une COPIE, pour la meme raison.
             self._choisir_fournisseur(aoi_geometry, source_crs)
+            # Un fournisseur qui reconstruit son terrain ne livre qu'une
+            # SURFACE : terrain nu, vegetation et bati graves. Lui demander un
+            # MNT, un MNH ou un nuage de points rendait en silence cette
+            # surface sous le nom demande (audit du 2026-10-02).
+            if self._fournisseur.fournit_terrain() and data_type != 1:
+                raise QgsProcessingException(
+                    "%s : seul le type MNS est disponible ici (le terrain y "
+                    "est reconstruit avec la vegetation et le bati). Choisir "
+                    "le MNS." % self._fournisseur.NOM)
             scr_travail = QgsCoordinateReferenceSystem(
                 "EPSG:%d" % self._epsg_travail)
 
@@ -4002,7 +4357,6 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                         "Aucune dalle LiDAR HD ne couvre cette zone - "
                         "impossible de calculer la ZIV ici."
                     )
-                self.logger.warning(detail_journal)
                 with contextlib.suppress(Exception):
                     from qgis.utils import iface as _iface
 
@@ -4013,7 +4367,9 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                             level=Qgis.MessageLevel.Warning,
                             duration=10,
                         )
-                return {"OUTPUT_DIRECTORY": str(downloads_dir), "OUTPUT_FILES": ""}
+                # Zone non couverte ou service muet : dans les deux cas, pas de
+                # ZIV — un echec, chacun avec SON motif (lessons.md, 2026-09-10).
+                raise QgsProcessingException(detail_journal)
 
             # Warn (don't block) when the user is about to download a lot of tiles
             if len(intersecting_tiles) > self.MAX_TILES_RECOMMENDED:
@@ -4025,6 +4381,7 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
 
             # All intersecting tiles are downloaded (no "best tile" mode)
             selected_tiles = self._select_best_tiles(intersecting_tiles)
+            self._noter_sources_france(selected_tiles, data_type_code)
 
             # --- Import des produits raster : moteur embarque ----------------
             # MNT / MNS / MNH passent par import_dalles : dalles demandees au serveur
@@ -4051,10 +4408,12 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                     # produit choisi.
                     self._terrain_nu = self._mnt_pour_les_courbes(
                         aoi_geometry, selected_tiles, downloads_dir, data_type)
-                    return self._finalize_result(resultat)
                 except Exception as e:
-                    self.logger.error("Import des dalles impossible : %s" % e)
-                    return {"OUTPUT_DIRECTORY": str(downloads_dir), "OUTPUT_FILES": ""}
+                    raise QgsProcessingException(
+                        "Import des dalles impossible : %s" % e) from e
+                # Hors du `try` : un echec de la ZIV n'est pas un echec de
+                # l'import, et ne doit pas en emprunter le message.
+                return self._finalize_result(resultat)
 
 
             # No user-facing concurrency limit - one worker per tile, capped
@@ -4070,11 +4429,9 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
             per_tile_mb = 500 if data_type == 3 else 30
             required_mb = per_tile_mb * len(selected_tiles) + 200
             if not self._check_disk_space(downloads_dir, required_mb):
-                self.logger.error(
+                raise QgsProcessingException(
                     f"Estimated download size = {required_mb} MB - "
-                    "not enough free space in the working directory."
-                )
-                return {}
+                    "not enough free space in the working directory.")
 
             # Initialize progress tracker
             progress_tracker = DownloadProgressTracker(feedback)
@@ -4160,8 +4517,7 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                 self._cleanup_temp_files()
 
             if not downloaded_files:
-                self.logger.warning("No files were successfully downloaded")
-                return {"OUTPUT_DIRECTORY": str(downloads_dir), "OUTPUT_FILES": ""}
+                raise QgsProcessingException("No files were successfully downloaded")
 
             # Process output based on strategy
             if merge_strategy == 0:  # Download All (No Merge)
@@ -4310,13 +4666,7 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
             self.logger.error(f"Error in main processing: {str(e)}")
             import traceback
 
-            tb = traceback.format_exc()
-            self.logger.error(tb)
-            # Persistent popup - won't disappear with the Processing dialog
-            self._show_persistent_error(
-                "Erreur pendant le traitement",
-                f"{e}\n\n--- Détail technique ---\n{tb}",
-            )
+            self.logger.error(traceback.format_exc())
             # Rendre un dictionnaire ici valait « termine avec succes » pour
             # Processing : le greffon affichait « finished » sur un calcul qui
             # n'avait rien produit. Seule une exception marque l'echec.

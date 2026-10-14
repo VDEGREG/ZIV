@@ -167,6 +167,10 @@ class ViewshedRaster(QgsProcessingAlgorithm):
                     mnt, observateur, courbure=courbure, refraction=refraction,
                     recul=RECUL,
                     unite_marge="profondeur_m" if type_analyse == PROFONDEUR else "degres",
+                    # Seule la profondeur sous l'horizon lit la marge : ailleurs
+                    # on s'epargne un tableau de la fenetre et deux arc-tangentes
+                    # par cellule.
+                    calcul_marge=type_analyse == PROFONDEUR,
                 )
             except ObservateurHorsMnt as erreur:
                 ignores.append(str(erreur))
