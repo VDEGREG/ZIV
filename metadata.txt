@@ -3,7 +3,7 @@ name=Zones d'influence visuelle (ZIV)
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 supportsQt6=yes
-version=1.7.0
+version=1.7.1
 author=G. DELSIGNE
 email=gregoire.delsigne@outlook.fr
 
@@ -31,7 +31,7 @@ icon=icon.png
 experimental=False
 deprecated=False
 
-changelog= 1.7.0 - Honest results, and a faster visibility engine.
+changelog= 1.7.1 - Honest results, a faster visibility engine, and each layer shown once.
     A run that cannot produce a viewshed now ends as a failure, with its reason, instead of reporting success; settings that cannot give a correct viewshed are refused before any download (point cloud, unmerged tiles, a type other than DSM in the United States, a radius beyond the memory of the computer).
-    Each viewshed comes with a provenance file (data sources and dates, settings, model assumptions, warnings); cells outside the analysis radius are now no-data instead of "not seen", and the legend says what each value means.
+    Each viewshed comes with a provenance file (data sources and dates, settings, model assumptions, warnings); cells outside the analysis radius are now no-data instead of "not seen", and the legend says what each value means. Output layers no longer appear twice in the Layers panel when the selected layer sits in a group.
     The visibility engine runs about 1.3 times faster with bit-identical results, and temporary outputs go to the Processing temporary folder, which QGIS empties on exit.

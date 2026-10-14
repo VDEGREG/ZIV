@@ -2138,6 +2138,14 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
         Le faire explicitement, et non en comptant sur l'ordre d'ajout : la
         traduction des couches dans le systeme du projet (1.5.0) les retire et
         les recharge, donc l'ordre d'arrivee ne veut plus rien dire.
+
+        Chaque couche reste dans le groupe ou QGIS l'a rangee. Une couche
+        ajoutee au projet va au point d'insertion, qui suit la selection du
+        panneau : dans un groupe quand la couche selectionnee y est. Or
+        `removeChildNode` n'otait que les enfants DIRECTS de la racine — la
+        copie montait en tete et l'original restait dans le groupe, si bien
+        que ZIV, rayon et points de vue s'affichaient deux fois (signale le
+        2026-10-13, sur une emprise rangee dans un groupe).
         """
         try:
             racine = QgsProject.instance().layerTreeRoot()
@@ -2161,9 +2169,10 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                 noeud = racine.findLayer(couche.id())
                 if noeud is None:
                     continue
+                groupe = noeud.parent()
                 copie = noeud.clone()
-                racine.insertChildNode(0, copie)
-                racine.removeChildNode(noeud)
+                groupe.insertChildNode(0, copie)
+                groupe.removeChildNode(noeud)
         except Exception as erreur:
             # Un ordre de legende ne justifie pas de faire echouer un calcul.
             self.logger.warning(
