@@ -2549,29 +2549,31 @@ class LidarDownloaderAlgorithm(QgsProcessingAlgorithm):
                 return valeur
 
         try:
-            import xml.etree.ElementTree as ElementTree
-
-            racine = ElementTree.parse(
-                str(Path(__file__).parent / "models" / "creation_ziv.model3")).getroot()
-            for noeud in racine.iter("Option"):
-                enfants = noeud.findall("Option")
-                algorithme = next((o.get("value") for o in enfants
-                                   if o.get("name") == "alg_id"), None)
-                params = next((o for o in enfants if o.get("name") == "params"), None)
-                if not algorithme or params is None:
-                    continue
+            # Lu par QGIS, comme le calcul le lit, et non par un parseur XML :
+            # le scan de securite de plugins.qgis.org (Bandit B405/B314) refuse
+            # celui de la bibliotheque standard, meme sur un fichier livre avec
+            # le greffon — publication de la 1.7.1 bloquee, 2026-10-14.
+            modele = QgsProcessingModelAlgorithm()
+            chemin = Path(__file__).parent / "models" / "creation_ziv.model3"
+            if not modele.fromFile(str(chemin)):
+                raise ValueError("modele illisible : %s" % chemin.name)
+            for enfant in modele.childAlgorithms().values():
+                algorithme = enfant.algorithmId()
                 statiques = {}
-                for liste in params.findall("Option"):
-                    for carte in liste.findall("Option"):
-                        for valeur in carte.findall("Option"):
-                            if valeur.get("name") == "static_value":
-                                statiques[liste.get("name")] = valeur.get("value")
+                for nom, sources in enfant.parameterSources().items():
+                    for source in sources:
+                        # `toVariant` ne porte « static_value » que pour une
+                        # valeur fixee dans le modele, comme le fichier.
+                        carte = source.toVariant()
+                        if "static_value" in carte:
+                            statiques[nom] = carte["static_value"]
                 if algorithme.endswith("pointsalonglines") and "DISTANCE" in statiques:
                     hypotheses["espacement_points_contour_m"] = nombre(statiques["DISTANCE"])
                 if "TARGET_HEIGHT" in statiques:
                     hypotheses["hauteur_cible_m"] = nombre(statiques["TARGET_HEIGHT"])
                 if "USE_CURVATURE" in statiques:
-                    hypotheses["courbure_terrestre"] = statiques["USE_CURVATURE"] == "true"
+                    hypotheses["courbure_terrestre"] = (
+                        str(statiques["USE_CURVATURE"]).lower() == "true")
                 if "REFRACTION" in statiques:
                     hypotheses["refraction"] = nombre(statiques["REFRACTION"])
         except Exception as erreur:
